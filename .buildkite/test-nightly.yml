@@ -686,6 +686,44 @@ steps:
                       path: /mnt/hf-cache
                       type: DirectoryOrCreate
 
+      - label: ":full_moon: Diffusion X2I(&A&T) · LingBot Video MoE T2I Function Test"
+        timeout_in_minutes: 90
+        commands:
+          - pytest -s -v tests/e2e/online_serving/test_lingbot_video_moe.py -k "text_to_image" -m "full_model and cuda" --run-level "full_model"
+        agents:
+          queue: "mithril-h100-pool"
+        plugins:
+          - kubernetes:
+              podSpec:
+                containers:
+                  - image: 936637512419.dkr.ecr.us-west-2.amazonaws.com/vllm-ci-pull-through-cache/q9t5s3a7/vllm-ci-test-repo:$BUILDKITE_COMMIT
+                    resources:
+                      limits:
+                        nvidia.com/gpu: 1
+                    volumeMounts:
+                      - name: devshm
+                        mountPath: /dev/shm
+                      - name: hf-cache
+                        mountPath: /root/.cache/huggingface
+                    env:
+                      - name: HF_HOME
+                        value: /root/.cache/huggingface
+                      - name: HF_TOKEN
+                        valueFrom:
+                          secretKeyRef:
+                            name: hf-token-secret
+                            key: token
+                nodeSelector:
+                  node.kubernetes.io/instance-type: gpu-h100-sxm
+                volumes:
+                  - name: devshm
+                    emptyDir:
+                      medium: Memory
+                  - name: hf-cache
+                    hostPath:
+                      path: /mnt/hf-cache
+                      type: DirectoryOrCreate
+
       - label: ":full_moon: Diffusion X2I(&A&T) · Function Test with H100 · Multi-GPU Qwen-Image"
         timeout_in_minutes: 120
         commands:
@@ -1319,10 +1357,10 @@ steps:
                       path: /mnt/hf-cache
                       type: DirectoryOrCreate
 
-      - label: ":full_moon: Diffusion X2V · LingBot Video MoE Function Test"
+      - label: ":full_moon: Diffusion X2V · LingBot Video MoE T2V/TI2V Function Test"
         timeout_in_minutes: 90
         commands:
-          - pytest -s -v tests/e2e/online_serving/test_lingbot_video_moe.py -m "full_model and cuda" --run-level "full_model"
+          - pytest -s -v tests/e2e/online_serving/test_lingbot_video_moe.py -k "video_generation" -m "full_model and cuda" --run-level "full_model"
         agents:
           queue: "mithril-h100-pool"
         plugins:

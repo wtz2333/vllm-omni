@@ -12,6 +12,7 @@ A unified script for text-to-video generation. Supports multiple models with mod
 | `hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-480p_t2v` | 480x832 | 121 | 50 | 6.0 | 1×A100 80GB |
 | `hunyuanvideo-community/HunyuanVideo-1.5-Diffusers-720p_t2v` | 720x1280 | 121 | 50 | 6.0 | FP8 + VAE tiling required |
 | `nvidia/Cosmos3-Nano` | 720x1280 | 189 | 35 | 6.0 | ~46 GiB (peak, 720p) |
+| `robbyant/lingbot-video-dense-1.3b` / `robbyant/lingbot-video-moe-30b-a3b` | 480x480 | 81 | 40 | 6.0 | Checkpoint-dependent |
 | `BestWishYsh/Helios-Base` / `Helios-Mid` / `Helios-Distilled` | 384x640 | 99 | 50 | 5.0 / 5.0 / 1.0 | — |
 
 ## Local CLI Usage
@@ -54,6 +55,20 @@ python text_to_video.py \
   --vae-use-tiling \
   --output vace_t2v_output.mp4
 ```
+
+### LingBot-Video
+
+The dedicated LingBot example explicitly selects the video output modality:
+
+```bash
+python examples/offline_inference/text_to_video/text_to_video_lingbot.py \
+  --model robbyant/lingbot-video-dense-1.3b \
+  --height 192 --width 320 --num-frames 9 --num-inference-steps 2 \
+  --output lingbot_t2v.mp4
+```
+
+Use the same command with `robbyant/lingbot-video-moe-30b-a3b` for the MoE
+checkpoint. Frame counts must be `1` or `4n+1`.
 
 LTX2 example:
 
