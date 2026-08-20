@@ -25,14 +25,18 @@ from vllm_omni.diffusion.models.lingbot_video.request_utils import (
     resolve_lingbot_output_dimensions,
     resolve_lingbot_size,
 )
+from vllm_omni.diffusion.models.lingbot_video.rewriter import LingBotVideoRewriter
+from vllm_omni.diffusion.models.lingbot_video.rewriter_backends import build_lingbot_rewriter
 
 __all__ = [
     "LingBotGenerationMode",
     "LingBotImageCondition",
     "LingBotRequestConfig",
     "LingBotVideoPipeline",
+    "LingBotVideoRewriter",
     "LingBotVideoTransformer3DModel",
     "apply_clean_prefix",
+    "build_lingbot_rewriter",
     "caption_from_lingbot_prompt",
     "geometry_align_image",
     "get_lingbot_video_pre_process_func",
