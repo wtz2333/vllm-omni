@@ -360,6 +360,30 @@ def test_sparse_moe_passes_tp_size_to_common_runner(mocker):
     assert fused_moe.call_args.kwargs["prefix"] == "test.blocks.0.ffn.experts"
 
 
+def test_transformer_routes_quantization_only_to_common_routed_experts(mocker):
+    from vllm_omni.diffusion.models.lingbot_video import lingbot_video_transformer as module
+
+    quant_config = mocker.Mock()
+    fused_moe = mocker.patch.object(module, "FusedMoE", return_value=torch.nn.Identity())
+
+    model = _tiny_transformer(
+        depth=1,
+        num_experts=4,
+        num_experts_per_tok=2,
+        moe_intermediate_size=8,
+        n_shared_experts=1,
+        n_group=2,
+        topk_group=1,
+        quant_config=quant_config,
+    )
+
+    assert model.quant_config is quant_config
+    assert fused_moe.call_args.kwargs["quant_config"] is quant_config
+    assert fused_moe.call_args.kwargs["prefix"].endswith(".ffn.experts")
+    assert model.blocks[0].ffn.shared_experts is not None
+    quant_config.get_quant_method.assert_not_called()
+
+
 def test_tiny_transformer_rejects_invalid_rope_dims():
     from vllm_omni.diffusion.models.lingbot_video import LingBotVideoTransformer3DModel
 

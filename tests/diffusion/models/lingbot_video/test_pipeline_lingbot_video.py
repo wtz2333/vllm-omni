@@ -131,6 +131,86 @@ def test_component_discovery_declarations():
     assert LingBotVideoPipeline.max_outputs_per_prompt == 1
 
 
+def test_expert_fp8_quantization_resolves_global_and_component_scope():
+    from vllm_omni.diffusion.models.lingbot_video import pipeline_lingbot_video as module
+    from vllm_omni.quantization import build_quant_config
+
+    global_fp8 = build_quant_config("fp8")
+    scoped_fp8 = build_quant_config({"transformer": {"method": "fp8"}})
+
+    assert (
+        module._resolve_lingbot_expert_quant_config(
+            global_fp8,
+            "transformer",
+            has_routed_experts=True,
+        )
+        is global_fp8
+    )
+    assert (
+        module._resolve_lingbot_expert_quant_config(
+            global_fp8,
+            "transformer",
+            has_routed_experts=False,
+        )
+        is None
+    )
+    assert (
+        module._resolve_lingbot_expert_quant_config(
+            scoped_fp8,
+            "transformer",
+            has_routed_experts=True,
+        ).get_name()
+        == "fp8"
+    )
+    assert (
+        module._resolve_lingbot_expert_quant_config(
+            scoped_fp8,
+            "refiner_transformer",
+            has_routed_experts=True,
+        )
+        is None
+    )
+    module._validate_lingbot_expert_quantization_targets(None, set())
+    module._validate_lingbot_expert_quantization_targets(global_fp8, {"transformer"})
+    with pytest.raises(NotImplementedError, match="requires a MoE transformer"):
+        module._validate_lingbot_expert_quantization_targets(
+            global_fp8,
+            set(),
+        )
+
+
+@pytest.mark.parametrize(
+    ("quant_config", "message"),
+    [
+        pytest.param(SimpleNamespace(get_name=lambda: "int8"), "only online FP8", id="method"),
+        pytest.param(
+            SimpleNamespace(get_name=lambda: "fp8", is_checkpoint_fp8_serialized=True),
+            "serialized FP8",
+            id="serialized",
+        ),
+        pytest.param(
+            SimpleNamespace(get_name=lambda: "fp8", activation_scheme="static"),
+            "dynamic online FP8",
+            id="static-activation",
+        ),
+        pytest.param(
+            SimpleNamespace(get_name=lambda: "fp8", store_dtype="mxfp4"),
+            "alternate FP8",
+            id="alternate-storage",
+        ),
+    ],
+)
+def test_expert_fp8_quantization_rejects_unsupported_modes(quant_config, message):
+    from vllm_omni.diffusion.models.lingbot_video import pipeline_lingbot_video as module
+
+    with pytest.raises(NotImplementedError, match=message):
+        module._resolve_lingbot_expert_quant_config(
+            quant_config,
+            "transformer",
+            has_routed_experts=True,
+        )
+
+
 def test_extra_body_params_include_video_flow_shift_alias():
     from vllm_omni.model_extras import get_extra_body_params
 

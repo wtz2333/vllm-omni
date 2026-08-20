@@ -18,6 +18,7 @@ from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.forward_context import set_forward_context as set_vllm_forward_context
 from vllm.model_executor.layers.fused_moe.router.gate_linear import GateLinear
 from vllm.model_executor.layers.linear import ColumnParallelLinear, RowParallelLinear
+from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
@@ -310,6 +311,7 @@ class LingBotVideoSparseMoeBlock(nn.Module):
         topk_group: int | None,
         routed_scaling_factor: float,
         n_shared_experts: int | None,
+        quant_config: QuantizationConfig | None = None,
         *,
         prefix: str,
     ):
@@ -348,6 +350,7 @@ class LingBotVideoSparseMoeBlock(nn.Module):
             tp_size=tp_size,
             dp_size=1,
             pcp_size=1,
+            quant_config=quant_config,
             prefix=f"{prefix}.experts",
         )
         self.shared_experts = None
@@ -408,6 +411,7 @@ class LingBotVideoBlock(nn.Module):
         topk_group,
         routed_scaling_factor,
         layer_idx: int,
+        quant_config: QuantizationConfig | None = None,
         *,
         prefix: str,
     ):
@@ -441,6 +445,7 @@ class LingBotVideoBlock(nn.Module):
                 topk_group=topk_group,
                 routed_scaling_factor=routed_scaling_factor,
                 n_shared_experts=n_shared_experts,
+                quant_config=quant_config,
                 prefix=f"{prefix}.ffn",
             )
         else:
@@ -608,12 +613,14 @@ class LingBotVideoTransformer3DModel(nn.Module):
         n_group: int | None = None,
         topk_group: int | None = None,
         routed_scaling_factor: float = 1.0,
+        quant_config: QuantizationConfig | None = None,
         prefix: str = "lingbot_video",
     ):
         super().__init__()
         head_dim = hidden_size // num_attention_heads
         assert head_dim == sum(axes_dims), f"head_dim {head_dim} != sum(axes_dims) {sum(axes_dims)}"
         mlp_only_layers = tuple(mlp_only_layers)
+        self.quant_config = quant_config
         self.config = SimpleNamespace(
             patch_size=tuple(patch_size),
             in_channels=in_channels,
@@ -672,6 +679,7 @@ class LingBotVideoTransformer3DModel(nn.Module):
                     topk_group=topk_group,
                     routed_scaling_factor=routed_scaling_factor,
                     layer_idx=i,
+                    quant_config=quant_config,
                     prefix=f"{prefix}.blocks.{i}",
                 )
                 for i in range(depth)

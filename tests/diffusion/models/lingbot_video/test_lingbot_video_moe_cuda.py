@@ -160,3 +160,75 @@ def test_common_fused_moe_matches_eager_lingbot_reference(init_fake_tp_group) ->
     torch.testing.assert_close(actual, expected, rtol=2e-2, atol=2e-3)
     torch.testing.assert_close(compiled_actual, actual)
     assert torch.isfinite(actual).all()
+
+
+@hardware_test(res={"cuda": "L4"}, num_cards=1)
+def test_online_fp8_quantizes_only_routed_experts_and_tracks_bf16(init_fake_tp_group) -> None:
+    from vllm.model_executor.layers.quantization.fp8 import Fp8Config
+    from vllm.platforms import current_platform
+    from vllm.v1.worker.workspace import init_workspace_manager
+
+    from vllm_omni.diffusion.models.lingbot_video import LingBotVideoTransformer3DModel
+
+    torch.manual_seed(123)
+    init_workspace_manager(torch.device("cuda"))
+    model_kwargs = {
+        "patch_size": (1, 1, 1),
+        "in_channels": 2,
+        "out_channels": 2,
+        "hidden_size": 16,
+        "num_attention_heads": 1,
+        "depth": 1,
+        "intermediate_size": 32,
+        "text_dim": 8,
+        "freq_dim": 8,
+        "axes_dims": (4, 4, 8),
+        "axes_lens": (32, 32, 32),
+        "num_experts": 8,
+        "num_experts_per_tok": 2,
+        "moe_intermediate_size": 8,
+        "n_shared_experts": 1,
+        "n_group": 4,
+        "topk_group": 1,
+        "routed_scaling_factor": 1.5,
+    }
+    baseline_model = LingBotVideoTransformer3DModel(
+        **model_kwargs,
+        prefix="test_lingbot_bf16_experts",
+    ).to(device="cuda", dtype=torch.bfloat16)
+    fp8_model = LingBotVideoTransformer3DModel(
+        **model_kwargs,
+        quant_config=Fp8Config(),
+        prefix="test_lingbot_fp8_experts",
+    ).to(device="cuda", dtype=torch.bfloat16)
+
+    checkpoint = [
+        ("blocks.0.ffn.experts.w1", torch.randn(8, 8, 16, dtype=torch.bfloat16) * 0.05),
+        ("blocks.0.ffn.experts.w2", torch.randn(8, 16, 8, dtype=torch.bfloat16) * 0.05),
+        ("blocks.0.ffn.experts.w3", torch.randn(8, 8, 16, dtype=torch.bfloat16) * 0.05),
+        ("blocks.0.ffn.router.weight", torch.randn(8, 16, dtype=torch.float32) * 0.05),
+        ("blocks.0.ffn.router.e_score_correction_bias", torch.randn(8, dtype=torch.float32) * 0.05),
+        ("blocks.0.ffn.shared_experts.gate_proj.weight", torch.randn(8, 16, dtype=torch.bfloat16) * 0.05),
+        ("blocks.0.ffn.shared_experts.up_proj.weight", torch.randn(8, 16, dtype=torch.bfloat16) * 0.05),
+        ("blocks.0.ffn.shared_experts.down_proj.weight", torch.randn(16, 8, dtype=torch.bfloat16) * 0.05),
+    ]
+
+    for model in (baseline_model, fp8_model):
+        model.load_weights((name, weight.clone()) for name, weight in checkpoint)
+        routed_experts = model.blocks[0].ffn.experts.routed_experts
+        routed_experts.quant_method.process_weights_after_loading(routed_experts)
+
+    baseline_block = baseline_model.blocks[0].ffn
+    fp8_block = fp8_model.blocks[0].ffn
+    assert fp8_block.experts.routed_experts.w13_weight.dtype == current_platform.fp8_dtype()
+    assert fp8_block.experts.routed_experts.w2_weight.dtype == current_platform.fp8_dtype()
+    assert fp8_block.experts.gate.weight.dtype == torch.float32
+    assert fp8_block.shared_experts.gate_proj.weight.dtype == torch.bfloat16
+
+    hidden_states = torch.randn(2, 5, 16, device="cuda", dtype=torch.bfloat16)
+    with torch.no_grad():
+        expected = baseline_block(hidden_states)
+        actual = fp8_block(hidden_states)
+
+    torch.testing.assert_close(actual, expected, rtol=1.5e-1, atol=2e-2)
+    assert torch.isfinite(actual).all()

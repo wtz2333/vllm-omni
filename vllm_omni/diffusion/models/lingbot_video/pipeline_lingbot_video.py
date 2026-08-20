@@ -18,6 +18,7 @@ from PIL import Image
 from torch import nn
 from transformers import Qwen3VLForConditionalGeneration, Qwen3VLProcessor
 from vllm.logger import init_logger
+from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 from vllm.model_executor.models.utils import AutoWeightsLoader
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig, TransformerConfig
@@ -76,6 +77,7 @@ from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.utils.tf_utils import get_transformer_config_kwargs
 from vllm_omni.diffusion.worker.request_batch import DiffusionRequestBatch
 from vllm_omni.errors import OmniClientError
+from vllm_omni.quantization import resolve_component_quant_config
 
 logger = init_logger(__name__)
 
@@ -165,6 +167,48 @@ def _dtype_from_name(value: Any, default: torch.dtype) -> torch.dtype:
     if normalized in {"fp32", "float32", "torch.float32"}:
         return torch.float32
     raise ValueError(f"Unsupported LingBot dtype: {value!r}.")
+
+
+def _resolve_lingbot_expert_quant_config(
+    quant_config: QuantizationConfig | None,
+    component: str,
+    *,
+    has_routed_experts: bool,
+) -> QuantizationConfig | None:
+    """Resolve LingBot's online FP8 config for routed experts only."""
+    resolved = resolve_component_quant_config(quant_config, component)
+    if resolved is None:
+        return None
+
+    if resolved.get_name() != "fp8":
+        raise NotImplementedError(
+            "LingBot-Video supports only online FP8 quantization for routed "
+            f"experts; component {component!r} received {resolved.get_name()!r}."
+        )
+    if getattr(resolved, "is_checkpoint_fp8_serialized", False):
+        raise NotImplementedError(
+            "LingBot-Video routed experts do not support serialized FP8 "
+            "checkpoints; use online FP8 with the original BF16 checkpoint."
+        )
+    if getattr(resolved, "activation_scheme", "dynamic") != "dynamic":
+        raise NotImplementedError("LingBot-Video routed experts support dynamic online FP8 activation scaling only.")
+    if getattr(resolved, "store_dtype", None) is not None:
+        raise NotImplementedError("LingBot-Video routed experts do not support alternate FP8 storage formats.")
+
+    return resolved if has_routed_experts else None
+
+
+def _validate_lingbot_expert_quantization_targets(
+    quant_config: QuantizationConfig | None,
+    components: set[str],
+) -> None:
+    if quant_config is None or components:
+        return
+    raise NotImplementedError(
+        "LingBot-Video quantization requires a MoE transformer with routed "
+        "experts. Use robbyant/lingbot-video-moe-30b-a3b or disable "
+        "quantization for Dense-only configurations."
+    )
 
 
 def _module_dtype(module: torch.nn.Module) -> torch.dtype:
@@ -612,6 +656,7 @@ class LingBotVideoPipeline(
             revision=revision,
         )
 
+        expert_quantized_components: set[str] = set()
         transformer_config = LingBotVideoTransformer3DModel.load_config(
             model,
             subfolder=transformer_subfolder,
@@ -622,8 +667,16 @@ class LingBotVideoPipeline(
             TransformerConfig.from_dict(transformer_config),
             LingBotVideoTransformer3DModel,
         )
+        transformer_quant_config = _resolve_lingbot_expert_quant_config(
+            od_config.quantization_config,
+            "transformer",
+            has_routed_experts=int(transformer_kwargs.get("num_experts", 0) or 0) > 0,
+        )
+        if transformer_quant_config is not None:
+            expert_quantized_components.add("transformer")
         self.transformer = LingBotVideoTransformer3DModel(
             **transformer_kwargs,
+            quant_config=transformer_quant_config,
             prefix="transformer",
         )
         self.transformer.to(dtype=transformer_dtype)
@@ -651,8 +704,16 @@ class LingBotVideoPipeline(
                     TransformerConfig.from_dict(refiner_transformer_config),
                     LingBotVideoTransformer3DModel,
                 )
+                refiner_quant_config = _resolve_lingbot_expert_quant_config(
+                    od_config.quantization_config,
+                    "refiner_transformer",
+                    has_routed_experts=int(refiner_transformer_kwargs.get("num_experts", 0) or 0) > 0,
+                )
+                if refiner_quant_config is not None:
+                    expert_quantized_components.add("refiner_transformer")
                 self.refiner_transformer = LingBotVideoTransformer3DModel(
                     **refiner_transformer_kwargs,
+                    quant_config=refiner_quant_config,
                     prefix="refiner_transformer",
                 )
                 self.refiner_transformer.to(dtype=transformer_dtype)
@@ -678,6 +739,11 @@ class LingBotVideoPipeline(
                     fall_back_to_pt=True,
                 )
             )
+
+        _validate_lingbot_expert_quantization_targets(
+            od_config.quantization_config,
+            expert_quantized_components,
+        )
 
         self.set_progress_bar_config(disable=bool(model_config.get("quiet_progress", True)))
         self.default_negative_prompt = DEFAULT_NEGATIVE_PROMPT

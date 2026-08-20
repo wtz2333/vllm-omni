@@ -166,6 +166,22 @@ python examples/offline_inference/text_to_video/text_to_video.py \
 `--cfg-parallel-size 2` because they split the same positive and negative
 guidance branches.
 
+The MoE checkpoint supports dynamic online FP8 for routed experts:
+
+```bash
+python examples/offline_inference/text_to_video/text_to_video.py \
+  --model robbyant/lingbot-video-moe-30b-a3b \
+  --height 480 --width 832 --num-frames 81 --num-inference-steps 30 \
+  --guidance-scale 3.0 --quantization fp8 \
+  --vae-use-tiling --output lingbot_moe_fp8_t2v.mp4
+```
+
+This is expert-only quantization: the common `FusedMoE` routed weights use
+online FP8 with dynamic activation scaling, while the FP32 router, BF16 shared
+experts, attention, Dense FFN layers, text encoder, and VAE keep their original
+precision. Serialized FP8 checkpoints and the Dense 1.3B checkpoint are not
+supported by this path.
+
 ### LTX-2
 
 ```bash
