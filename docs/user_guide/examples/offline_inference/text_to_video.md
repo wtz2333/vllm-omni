@@ -55,6 +55,27 @@ paths without `lingbot` in the directory name, add
 `--model-class-name LingBotVideoPipeline`. Model-only options use
 `--extra-body`, for example `'{"batch_cfg": true, "output_type": "np"}'`.
 
+For the Hopper speed-first path, combine routed-expert FP8 with calibrated
+FA3 FP8 attention:
+
+```bash
+python text_to_video.py \
+  --model robbyant/lingbot-video-moe-30b-a3b \
+  --prompt "a robotic arm picks up a game controller" \
+  --quantization fp8 \
+  --diffusion-kv-cache-dtype fp8 \
+  --height 480 --width 832 --num-frames 121 --num-inference-steps 40 \
+  --guidance-scale 3.0 --flow-shift 3.0 --fps 24 \
+  --output lingbot_fp8_speed.mp4
+```
+
+On one NVIDIA L20X, the official LingBot `example_3` workload measured
+`178.86 s` in BF16 and `144.92 s` with this combined speed-first path
+(`1.234x`, 18.98% latency reduction). It is intentionally lossy: the measured
+all-frame PSNR against BF16 was `13.69 dB`. Peak memory fell from `83,446 MiB`
+to `59,400 MiB`. Use expert-only FP8 when lower visual drift matters more than
+maximum speed.
+
 ### LTX-2
 
 ```bash

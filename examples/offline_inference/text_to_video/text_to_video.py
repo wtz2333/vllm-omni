@@ -412,6 +412,12 @@ def parse_args() -> argparse.Namespace:
 
     # Distributed and parallel execution
     parser.add_argument(
+        "--diffusion-kv-cache-dtype",
+        choices=["fp8"],
+        default=None,
+        help="Quantize eligible diffusion FlashAttention Q/K/V tensors (speed-first).",
+    )
+    parser.add_argument(
         "--ulysses-mode",
         type=str,
         default="strict",
@@ -574,6 +580,8 @@ def main():
         omni_kwargs["flow_shift"] = args.flow_shift
     if args.quantization is not None:
         omni_kwargs["quantization"] = args.quantization
+    if args.diffusion_kv_cache_dtype is not None:
+        omni_kwargs["diffusion_kv_cache_dtype"] = args.diffusion_kv_cache_dtype
     if args.cache_backend is not None:
         omni_kwargs["cache_backend"] = args.cache_backend
         omni_kwargs["cache_config"] = cache_config

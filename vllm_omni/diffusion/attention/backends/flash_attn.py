@@ -64,6 +64,7 @@ class FlashAttentionImpl(AttentionImpl):
     # authors can opt a specific Attention layer out via
     # ``Attention(disable_kv_quant=True)``.
     _supported_kv_cache_dtypes = {
+        "cuda": {"fp8"},
         "npu": {"fp8"},
     }
 
@@ -85,6 +86,7 @@ class FlashAttentionImpl(AttentionImpl):
         self.qkv_layout = qkv_layout
         cfg = get_current_diffusion_config_or_none()
         self.fa_deterministic = bool(getattr(cfg, "fa_deterministic", False)) if cfg is not None else False
+        self._cuda_fp8_scales: tuple[torch.Tensor, torch.Tensor, torch.Tensor] | None = None
         if backend_kwargs:
             logger.warning("FlashAttentionImpl ignoring backend_kwargs: %s", list(backend_kwargs.keys()))
 
@@ -101,6 +103,69 @@ class FlashAttentionImpl(AttentionImpl):
     def _unwrap_flash_output(out: torch.Tensor | tuple[torch.Tensor, ...]) -> torch.Tensor:
         # FA3 may return (out, lse), FA2 returns out
         return out[0] if isinstance(out, tuple) else out
+
+    def _forward_fa_quant_cuda(
+        self,
+        query: torch.Tensor,
+        key: torch.Tensor,
+        value: torch.Tensor,
+        attn_func,
+    ) -> torch.Tensor | None:
+        """Run dense FA3 with FP8 Q/K/V and BF16 output.
+
+        The first call calibrates per-layer tensor scales. Reusing them avoids
+        reduction kernels on steady-state diffusion forwards.
+        """
+        if getattr(attn_func, "__module__", "") != "fa3_fwd_interface":
+            logger.warning_once(
+                "CUDA diffusion FP8 attention requires fa3_fwd_interface; falling back to native dtype."
+            )
+            return None
+        if query.is_cuda and torch.cuda.get_device_capability(query.device)[0] < 9:
+            logger.warning_once("CUDA diffusion FP8 attention requires Hopper or newer; falling back to native dtype.")
+            return None
+
+        from vllm import _custom_ops as ops
+
+        def quantize(tensor: torch.Tensor, scale: torch.Tensor | None):
+            flat = tensor.reshape(-1, tensor.shape[-1])
+            if scale is None:
+                quantized, output_scale = ops.scaled_fp8_quant(flat)
+            else:
+                quantized, output_scale = ops.scaled_fp8_quant(flat, scale)
+            return quantized.reshape_as(tensor), output_scale
+
+        scales = self._cuda_fp8_scales
+        if scales is None or scales[0].device != query.device:
+            q_fp8, q_scale = quantize(query, None)
+            k_fp8, k_scale = quantize(key, None)
+            v_fp8, v_scale = quantize(value, None)
+            scales = (
+                q_scale.detach(),
+                k_scale.detach(),
+                v_scale.detach(),
+            )
+            self._cuda_fp8_scales = scales
+        else:
+            q_scale, k_scale, v_scale = scales
+            q_fp8, _ = quantize(query, q_scale)
+            k_fp8, _ = quantize(key, k_scale)
+            v_fp8, _ = quantize(value, v_scale)
+
+        def descale(scale: torch.Tensor, tensor: torch.Tensor) -> torch.Tensor:
+            return scale.view(1, 1).expand(tensor.shape[0], tensor.shape[2]).contiguous()
+
+        fa_kwargs = {
+            "causal": self.causal,
+            "softmax_scale": self.softmax_scale,
+            "q_descale": descale(q_scale, query),
+            "k_descale": descale(k_scale, key),
+            "v_descale": descale(v_scale, value),
+        }
+        if self.fa_deterministic:
+            fa_kwargs["deterministic"] = True
+        out = attn_func(q_fp8, k_fp8, v_fp8, **fa_kwargs)
+        return self._unwrap_flash_output(out)
 
     @staticmethod
     def _flash_wrapper(q, k, v, *, attn_func, **kwargs):
@@ -325,6 +390,10 @@ class FlashAttentionImpl(AttentionImpl):
             )
 
         if flash_attn_func is not None:
+            if extra.get("kv_cache_dtype") == "fp8":
+                fp8_out = self._forward_fa_quant_cuda(query, key, value, flash_attn_func)
+                if fp8_out is not None:
+                    return fp8_out
             fa_kwargs = {
                 "causal": self.causal,
                 "softmax_scale": self.softmax_scale,

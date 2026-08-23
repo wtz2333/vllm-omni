@@ -102,6 +102,13 @@ LingBot-Video's FP8 path quantizes only the common `FusedMoE` routed experts.
 The FP32 router, BF16 shared experts, attention, Dense FFN layers, text encoder,
 and VAE retain their checkpoint precision.
 
+On NVIDIA Hopper, the maximum-throughput LingBot recipe can additionally set
+`diffusion_kv_cache_dtype="fp8"` to quantize dense FA3 Q/K/V tensors. This is
+a separate, more lossy speed-first optimization; it does not change which
+weights `quantization="fp8"` selects. See the
+[text-to-video LingBot example](../examples/offline_inference/text_to_video.md#lingbot-video)
+for measured latency, memory, and quality.
+
 ### Multi-Stage Omni/TTS Model (Qwen3-Omni, Qwen3-TTS)
 
 | Model | Scope | Format | Status |

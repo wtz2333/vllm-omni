@@ -16,9 +16,13 @@ quantization uses the dedicated diffusion flags so omni serve does not inherit
 that default.
 
 In vLLM-Omni diffusion pipelines, this is a runtime FA path: Q/K/V tensors are
-dynamically quantized before the attention operator. It does not quantize model
+quantized online before the attention operator. It does not quantize model
 weights and is separate from [FP8 W8A8](fp8.md), [Int8 W8A8](int8.md), or
 pre-quantized checkpoint formats.
+
+On CUDA with `fa3-fwd`, the first eligible dense forward calibrates one
+per-layer tensor scale for each of Q, K, and V. Later forwards reuse those
+scales to avoid repeated reductions and call FA3 with native FP8 inputs.
 
 If `diffusion_kv_cache_dtype` is not set, behavior is unchanged and attention
 runs in the native dtype.
@@ -28,15 +32,15 @@ runs in the native dtype.
 | Device | FP8 FA |
 |--------|--------|
 | Ascend NPU | ✅ |
-| NVIDIA GPU | ❌ |
+| NVIDIA Hopper GPU with `fa3-fwd` | ✅ |
 | AMD ROCm | ❌ |
 | Intel XPU | ❌ |
 
 Legend: `✅` supported, `❌` unsupported.
 
-FP8 FA is currently implemented only for the NPU Flash Attention backend. Other
-backends do not support `diffusion_kv_cache_dtype="fp8"` for diffusion attention
-and fall back to native dtype execution.
+FP8 FA is implemented for the NPU Flash Attention backend and CUDA Hopper
+through `fa3_fwd_interface`. CUDA installations using FA2 or another wrapper
+fall back to native dtype execution.
 
 ## Model Type Support
 
@@ -45,6 +49,7 @@ and fall back to native dtype execution.
 | Model | Scope | Status | Notes |
 |-------|-------|--------|-------|
 | Wan2.2 | Eligible DiT full-attention FA on Ascend NPU | Tested | Compare quality and latency against a BF16 baseline before production use |
+| LingBot-Video MoE | Dense FA3 self-attention on NVIDIA Hopper | Tested | Speed-first; combine with routed-expert FP8 and validate video quality |
 | Other diffusion models | Eligible DiT full-attention FA on Ascend NPU | Not tested | You can try `diffusion_kv_cache_dtype="fp8"`; tune `diffusion_kv_cache_skip_steps` and `diffusion_kv_cache_skip_layers` when higher precision is needed |
 
 ### Multi-Stage Omni/TTS Model (Qwen3-Omni, Qwen3-TTS)
@@ -123,3 +128,6 @@ layers skip FP8 FA; all other eligible full-attention forwards use the FP8 path.
 4. Report both latency and quality results when enabling this option for a new
    model. For image or video models, include visual comparison and quantitative
    metrics when available, such as PSNR or SSIM.
+5. CUDA scale reuse is a speed-first optimization. The cached scales are
+   calibrated by the first eligible forward; use the skip selectors or leave
+   the option disabled when strict numerical reproducibility is required.

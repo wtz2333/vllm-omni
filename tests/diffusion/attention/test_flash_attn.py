@@ -308,6 +308,64 @@ def test_flash_attn_func_preferred_over_varlen():
     print("✓ flash_attn_func forward works correctly!")
 
 
+def test_cuda_fp8_calibrates_once_then_reuses_static_scales(monkeypatch):
+    from vllm import _custom_ops as ops
+
+    quant_calls = []
+    fa_calls = []
+
+    def fake_quant(input_tensor, scale=None):
+        quant_calls.append(scale)
+        if scale is None:
+            scale = torch.tensor([0.25])
+        return input_tensor.to(torch.float16), scale
+
+    def fake_fa(q, k, v, **kwargs):
+        fa_calls.append((q, k, v, kwargs))
+        return q.to(torch.bfloat16)
+
+    fake_fa.__module__ = "fa3_fwd_interface"
+    monkeypatch.setattr(ops, "scaled_fp8_quant", fake_quant)
+    monkeypatch.setattr(fa, "flash_attn_func", fake_fa)
+    monkeypatch.setattr(fa, "HAS_FLASH_ATTN", True)
+
+    impl = FlashAttentionImpl(num_heads=2, head_size=4, softmax_scale=0.5)
+    query = torch.randn(1, 8, 2, 4)
+    metadata = AttentionMetadata(extra={"kv_cache_dtype": "fp8"})
+
+    first = impl.forward_cuda(query, query, query, metadata)
+    second = impl.forward_cuda(query, query, query, metadata)
+
+    assert first.shape == query.shape == second.shape
+    assert len(quant_calls) == 6
+    assert all(scale is None for scale in quant_calls[:3])
+    assert all(scale is not None for scale in quant_calls[3:])
+    assert len(fa_calls) == 2
+    assert fa_calls[0][3]["q_descale"].shape == (1, 2)
+    assert impl._cuda_fp8_scales is not None
+
+
+def test_cuda_fp8_falls_back_when_dense_func_is_not_fa3(monkeypatch):
+    calls = []
+
+    def fake_fa(q, k, v, **kwargs):
+        calls.append(kwargs)
+        return q
+
+    monkeypatch.setattr(fa, "flash_attn_func", fake_fa)
+    monkeypatch.setattr(fa, "HAS_FLASH_ATTN", True)
+
+    impl = FlashAttentionImpl(num_heads=2, head_size=4, softmax_scale=0.5)
+    query = torch.randn(1, 8, 2, 4)
+    metadata = AttentionMetadata(extra={"kv_cache_dtype": "fp8"})
+
+    output = impl.forward_cuda(query, query, query, metadata)
+
+    assert torch.equal(output, query)
+    assert "q_descale" not in calls[0]
+    assert impl._cuda_fp8_scales is None
+
+
 def test_piecewise_flash_attn_uses_varlen_fallback(monkeypatch):
     calls = []
 
