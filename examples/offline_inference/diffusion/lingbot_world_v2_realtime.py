@@ -63,6 +63,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--fps", type=int, default=16)
     parser.add_argument("--gpu-memory-fraction", type=float, default=0.1)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
+    parser.add_argument("--ulysses-degree", type=int, default=1)
     parser.add_argument("--enforce-eager", action="store_true")
     return parser.parse_args(argv)
 
@@ -174,7 +175,10 @@ async def run(argv: Sequence[str] | None = None) -> Path:
         model=args.model,
         engine_backend="vllm_omni.experimental.ar_diffusion.engine.ARDiffusionEngine",
         enforce_eager=args.enforce_eager,
-        parallel_config=DiffusionParallelConfig(tensor_parallel_size=args.tensor_parallel_size),
+        parallel_config=DiffusionParallelConfig(
+            tensor_parallel_size=args.tensor_parallel_size,
+            ulysses_degree=args.ulysses_degree,
+        ),
         max_num_seqs=1,
         model_config={
             "ar_diffusion_height": args.height,

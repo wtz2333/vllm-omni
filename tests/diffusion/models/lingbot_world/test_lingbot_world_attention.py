@@ -7,7 +7,7 @@ import importlib.util
 import math
 import sys
 from pathlib import Path
-from types import ModuleType
+from types import ModuleType, SimpleNamespace
 
 import pytest
 import torch
@@ -33,6 +33,10 @@ _STUBBED_MODULE_NAMES = (
     "vllm_omni.diffusion",
     "vllm_omni.diffusion.attention",
     "vllm_omni.diffusion.attention.layer",
+    "vllm_omni.diffusion.distributed",
+    "vllm_omni.diffusion.distributed.comm",
+    "vllm_omni.diffusion.distributed.parallel_state",
+    "vllm_omni.diffusion.distributed.sp_plan",
     "vllm_omni.diffusion.layers",
     "vllm_omni.diffusion.layers.norm",
     "vllm_omni.diffusion.layers.rope",
@@ -57,6 +61,34 @@ def _install_vllm_stubs() -> None:
     distributed.get_tensor_model_parallel_rank = lambda: 0
     distributed.get_tensor_model_parallel_world_size = lambda: 1
     distributed.tensor_model_parallel_all_reduce = lambda value: value
+
+    class _SeqAllToAll4D:
+        def apply(group, value, scatter_idx, gather_idx, use_sync=False):
+            del group, scatter_idx, gather_idx, use_sync
+            return value
+
+    sys.modules["vllm_omni.diffusion.distributed.comm"].SeqAllToAll4D = _SeqAllToAll4D
+    sys.modules["vllm_omni.diffusion.distributed.parallel_state"].get_sp_group = lambda: SimpleNamespace(
+        ulysses_world_size=1,
+        ulysses_rank=0,
+        ulysses_group=None,
+    )
+
+    class _SequenceParallelInput:
+        def __init__(self, split_dim, expected_dims=None, split_output=False, auto_pad=False):
+            self.split_dim = split_dim
+            self.expected_dims = expected_dims
+            self.split_output = split_output
+            self.auto_pad = auto_pad
+
+    class _SequenceParallelOutput:
+        def __init__(self, gather_dim, expected_dims=None):
+            self.gather_dim = gather_dim
+            self.expected_dims = expected_dims
+
+    sp_plan = sys.modules["vllm_omni.diffusion.distributed.sp_plan"]
+    sp_plan.SequenceParallelInput = _SequenceParallelInput
+    sp_plan.SequenceParallelOutput = _SequenceParallelOutput
 
     def set_weight_attrs(weight: torch.Tensor, attrs: dict) -> None:
         for name, value in attrs.items():
