@@ -9,6 +9,7 @@ import torch
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
+from vllm_omni.diffusion.models.interface import supports_step_execution
 from vllm_omni.diffusion.request import OmniDiffusionRequest
 from vllm_omni.diffusion.sched.interface import DiffusionSchedulerOutput, KVPrefetchJob
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
@@ -90,7 +91,7 @@ class ARDiffusionModelRunner(DiffusionModelRunner):
 
     def _preallocate_kv_cache(self, *, available_bytes: int | None = None) -> None:
         """Build pools solely from the pipeline capability and runner config."""
-        if bool(getattr(self.od_config, "step_execution", False)):
+        if bool(getattr(self.od_config, "step_execution", False)) and not supports_step_execution(self.pipeline):
             raise ValueError(
                 "ARDiffusionModelRunner currently supports request-mode execution only; "
                 "step_execution=True would bypass per-request AR session binding."
@@ -291,10 +292,62 @@ class ARDiffusionModelRunner(DiffusionModelRunner):
         )
 
     def execute_stepwise(self, scheduler_output: DiffusionSchedulerOutput) -> BatchRunnerOutput:
-        """Reject step execution until step-aware AR state binding exists."""
-        raise RuntimeError(
-            "ARDiffusionModelRunner does not support step execution; use request mode with step_execution=False."
-        )
+        """Bind runner-owned KV for one stepwise invocation, then inherit the step loop."""
+        pipeline = getattr(self, "pipeline", None)
+        if pipeline is None or not supports_step_execution(pipeline):
+            raise RuntimeError(
+                "ARDiffusionModelRunner does not support step execution; use request mode with step_execution=False."
+            )
+        if self.kv_cache is None:
+            return super().execute_stepwise(scheduler_output)
+        capability = self._ar_diffusion_capability
+        if capability is None:
+            raise RuntimeError("AR-Diffusion capability missing after KV cache initialization")
+        request_ids = list(getattr(scheduler_output, "scheduled_request_ids", ()))
+        if not request_ids:
+            return super().execute_stepwise(scheduler_output)
+        if len(request_ids) != 1:
+            raise RuntimeError(
+                "AR-Diffusion step execution supports one request at a time; "
+                f"got {len(request_ids)} scheduled requests."
+            )
+        request_id = request_ids[0]
+        session_id = request_id
+        state = self._get_or_create_session(session_id)
+        started = time.perf_counter()
+        try:
+            with capability.bind_ar_diffusion_state(session_id, state):
+                output = super().execute_stepwise(scheduler_output)
+            if self.device is not None and torch.device(self.device).type == "cuda":
+                torch.accelerator.synchronize(self.device)
+        except Exception:
+            self._release_session(
+                session_id,
+                reset_model=False,
+                reason="forward_exception",
+                suppress_errors=True,
+            )
+            state_cache = getattr(self, "state_cache", None)
+            if isinstance(state_cache, dict):
+                state_cache.pop(request_id, None)
+            logger.warning(
+                "AR-Diffusion stepwise failed for session=%s; KV and model state were released",
+                session_id,
+            )
+            raise
+        self._perf_e2e_times.append(time.perf_counter() - started)
+        runner_output = output.get_request_output(request_id)
+        finished = bool(runner_output is not None and runner_output.finished)
+        result = None if runner_output is None else runner_output.result
+        errored = bool(result is not None and getattr(result, "error", None))
+        if finished or errored:
+            self._release_session(
+                session_id,
+                reset_model=False,
+                reason="forward_exception" if errored else "close",
+                suppress_errors=True,
+            )
+        return output
 
     def _warmup_ar_rollout(self) -> None:
         """Run model-provided warmup requests, or safely skip when absent."""

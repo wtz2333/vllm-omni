@@ -7,7 +7,7 @@
 - Vendor: Robbyant
 - Model: `robbyant/lingbot-world-v2-14b-causal-fast-diffusers`
 - Task: image-conditioned interactive world generation
-- Modes: offline trajectory replay and in-process realtime AR-Diffusion ticks
+- Modes: offline trajectory replay, in-process realtime AR-Diffusion ticks, and stepwise one-request streaming
 - Hardware validated: NVIDIA H200 and B200
 - Maintainer: Community
 
@@ -61,12 +61,35 @@ exercises the same `ARDiffusionSessionManager -> ARDiffusionOmniTickConsumer
 -> AsyncOmni -> ARDiffusionEngine` path used by a future HTTP or WebSocket
 transport.
 
-This PR intentionally does not define a public realtime HTTP/WebSocket schema.
+This recipe does not define a public realtime HTTP/WebSocket schema.
 An online serving client should be added together with the public transport
 API rather than exposing LingBot-specific event fields from the generic model
-runtime. The structured camera-interaction frontend and transport work is
-tracked separately in
-[vllm-project/vllm-omni#5527](https://github.com/vllm-project/vllm-omni/pull/5527).
+runtime.
+
+## Stepwise one-request generation
+
+The stepwise path keeps AR-Diffusion paged KV but issues **one**
+`AsyncOmni.generate()` for the whole rollout. `prepare_encode` runs once;
+each AR block is four DMD steps then one streamed latent chunk. Camera
+motion for this landing is a request-scoped `camera_action_script` (one
+three-frame action list per chunk). Live mid-request WASD and public
+WebSocket serving are not part of this path.
+
+```bash
+python examples/offline_inference/diffusion/lingbot_world_v2_stepwise.py \
+  --image /path/to/first_frame.png \
+  --prompt "A road through a forest" \
+  --events /path/to/events.jsonl \
+  --output-dir /tmp/lingbot-stepwise \
+  --gpu-memory-fraction 0.6
+```
+
+`AsyncOmni` is constructed with `engine_backend` pointing at
+`ARDiffusionEngine`, `step_execution=True`, `diffusion_streaming_output=True`,
+and `max_num_seqs=1`. Output remains `output_type="latent"`. Identity
+metadata uses `session_id = request_id` and contiguous `chunk_index` values
+from zero. The tick example remains available for the older one-block-per-
+`generate()` control plane.
 
 ## Realtime identity and controls
 
@@ -107,7 +130,8 @@ tested commit.
 - The realtime control plane is internal; there is no public server transport yet.
 - AR-Diffusion stages currently require one replica because session-affine
   routing across replicas is not implemented.
-- One AR block is generated per request and `max_num_seqs` must be one.
+- Tick mode generates one AR block per request. Stepwise mode generates many
+  AR blocks in one request. `max_num_seqs` must be one in both cases.
 - Stateful streaming VAE decode is not implemented; the realtime example emits
   latent chunks.
 - SP/USP, pipeline/CFG parallelism, HSDP, VAE parallelism, quantization,
@@ -119,4 +143,5 @@ tested commit.
 - Checkpoint: <https://huggingface.co/robbyant/lingbot-world-v2-14b-causal-fast-diffusers>
 - Official implementation: <https://github.com/robbyant/lingbot-world-v2>
 - Offline example: [`examples/offline_inference/diffusion/lingbot_world_v2.py`](../../examples/offline_inference/diffusion/lingbot_world_v2.py)
+- Stepwise example: [`examples/offline_inference/diffusion/lingbot_world_v2_stepwise.py`](../../examples/offline_inference/diffusion/lingbot_world_v2_stepwise.py)
 - Realtime design: [`docs/design/feature/realtime_ar_diffusion.md`](../../docs/design/feature/realtime_ar_diffusion.md)

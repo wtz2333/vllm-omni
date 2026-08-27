@@ -114,6 +114,27 @@ class BatchCapablePipeline(CapablePipeline):
     supports_request_batch = True
 
 
+class StepCapablePipeline(CapablePipeline):
+    supports_step_execution = True
+
+    def prepare_encode(self, state, **kwargs):
+        del kwargs
+        return state
+
+    def denoise_step(self, input_batch, *, states=None, **kwargs):
+        del input_batch, states, kwargs
+        return None
+
+    def step_scheduler(self, state, noise_pred, **kwargs):
+        del state, noise_pred, kwargs
+
+    def post_decode(self, state, **kwargs):
+        del state, kwargs
+        from vllm_omni.diffusion.data import DiffusionOutput
+
+        return DiffusionOutput()
+
+
 def make_runner(
     pipeline: object,
     *,
@@ -424,12 +445,78 @@ def test_ar_runner_rejects_step_and_request_batch_modes():
         make_runner(BatchCapablePipeline(lingbot_like_spec()))
 
 
+def test_ar_runner_allows_step_execution_when_pipeline_implements_the_contract():
+    runner = make_runner(StepCapablePipeline(lingbot_like_spec()), step_execution=True)
+    assert runner.kv_cache is not None
+
+
 def test_ar_runner_defensively_rejects_inherited_batch_and_step_entrypoints():
     runner = object.__new__(ARDiffusionModelRunner)
     with pytest.raises(RuntimeError, match="request-batch execution"):
         runner.execute_model_batch(None, None)
     with pytest.raises(RuntimeError, match="step execution"):
         runner.execute_stepwise(None)
+
+
+def test_execute_stepwise_binds_request_id_session_and_unbinds_after_call(monkeypatch):
+    from vllm_omni.diffusion.worker.utils import BatchRunnerOutput, RunnerOutput
+
+    pipeline = StepCapablePipeline(lingbot_like_spec())
+    runner = make_runner(pipeline, step_execution=True)
+    bound_during = []
+
+    def fake_execute(self, scheduler_output):
+        del self, scheduler_output
+        bound_during.append(pipeline.bound_state is not None)
+        return BatchRunnerOutput.from_list([RunnerOutput(request_id="req-1", finished=False)])
+
+    monkeypatch.setattr(DiffusionModelRunner, "execute_stepwise", fake_execute)
+    output = runner.execute_stepwise(SimpleNamespace(scheduled_request_ids=["req-1"]))
+
+    assert bound_during == [True]
+    assert pipeline.bound_state is None
+    assert pipeline.binds == ["req-1"]
+    assert "req-1" in runner._sessions
+    assert output.get_request_output("req-1") is not None
+    assert not pipeline.closes
+
+
+def test_execute_stepwise_closes_session_when_request_finishes(monkeypatch):
+    from vllm_omni.diffusion.worker.utils import BatchRunnerOutput, RunnerOutput
+
+    pipeline = StepCapablePipeline(lingbot_like_spec())
+    runner = make_runner(pipeline, step_execution=True)
+
+    def fake_execute(self, scheduler_output):
+        del self, scheduler_output
+        return BatchRunnerOutput.from_list([RunnerOutput(request_id="req-1", finished=True)])
+
+    monkeypatch.setattr(DiffusionModelRunner, "execute_stepwise", fake_execute)
+    runner.execute_stepwise(SimpleNamespace(scheduled_request_ids=["req-1"]))
+
+    assert pipeline.bound_state is None
+    assert pipeline.closes == ["req-1"]
+    assert "req-1" not in runner._sessions
+
+
+def test_execute_stepwise_exception_releases_kv_and_does_not_resume_pages(monkeypatch):
+    pipeline = StepCapablePipeline(lingbot_like_spec())
+    runner = make_runner(pipeline, step_execution=True)
+    first = runner._get_or_create_session("req-1")
+
+    def boom(self, scheduler_output):
+        del self, scheduler_output
+        raise RuntimeError("step failed")
+
+    monkeypatch.setattr(DiffusionModelRunner, "execute_stepwise", boom)
+    with pytest.raises(RuntimeError, match="step failed"):
+        runner.execute_stepwise(SimpleNamespace(scheduled_request_ids=["req-1"]))
+
+    assert pipeline.bound_state is None
+    assert pipeline.closes == ["req-1"]
+    assert "req-1" not in runner._sessions
+    second = runner._get_or_create_session("req-1")
+    assert second is not first
 
 
 def test_model_specific_warmup_provider_is_consumed(monkeypatch):
