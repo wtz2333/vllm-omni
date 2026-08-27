@@ -36,6 +36,13 @@ LingBot-Video MoE transformer.
 - **Dense pipeline**: decoded-video MAE, MSE, PSNR, latency, and optional steady-state timings
 - **MoE transformer**: bitwise router, sparse-block, shared-expert, and full-transformer parity
 
+### [Interactive World Models](lingbot/README.md) — Stateful Tick Benchmark
+
+Adapter-driven benchmark core for session-based world models. It measures
+warm/cold tick latency, RTF, output throughput, lifecycle time, stage timing,
+memory, and correlation/correctness contracts while keeping model-specific
+loading and controls outside the generic benchmark directory.
+
 ### [Distributed](distributed/omni_connectors/README.md) — RDMA Connector Testing
 
 RDMA environment setup and transfer tests for `MooncakeTransferEngineConnector`, including pytest-based single-node checks and manual cross-node benchmarks.
