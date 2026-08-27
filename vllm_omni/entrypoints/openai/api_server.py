@@ -130,6 +130,7 @@ from vllm_omni.entrypoints.openai.protocol.videos import (
 from vllm_omni.entrypoints.openai.realtime_connection import RealtimeConnection
 from vllm_omni.entrypoints.openai.serving_audio_generate import OmniOpenAIServingAudioGenerate
 from vllm_omni.entrypoints.openai.serving_chat import OmniOpenAIServingChat
+from vllm_omni.entrypoints.openai.serving_realtime_world import OmniRealtimeWorldHandler
 from vllm_omni.entrypoints.openai.serving_speech import OmniOpenAIServingSpeech
 from vllm_omni.entrypoints.openai.serving_speech_stream import OmniStreamingSpeechHandler
 from vllm_omni.entrypoints.openai.serving_video import (
@@ -814,6 +815,11 @@ async def omni_init_app_state(
             stage_configs=diffusion_stage_configs,
         )
         state.openai_streaming_video_output = OmniStreamingVideoOutputHandler(
+            engine_client=engine_client,
+            model_name=model_name,
+            stage_configs=diffusion_stage_configs,
+        )
+        state.openai_realtime_world = OmniRealtimeWorldHandler(
             engine_client=engine_client,
             model_name=model_name,
             stage_configs=diffusion_stage_configs,
@@ -1699,6 +1705,23 @@ async def streaming_video_output(websocket: WebSocket):
             {
                 "type": "error",
                 "message": "Streaming video generation is not available",
+            }
+        )
+        await websocket.close()
+        return
+    await handler.handle_session(websocket)
+
+
+@router.websocket("/v1/realtime/world")
+async def realtime_world(websocket: WebSocket):
+    """WebSocket endpoint for persistent interactive AR-Diffusion worlds."""
+    handler = getattr(websocket.app.state, "openai_realtime_world", None)
+    if handler is None:
+        await websocket.accept()
+        await websocket.send_json(
+            {
+                "type": "error",
+                "message": "Realtime world generation is not available",
             }
         )
         await websocket.close()

@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>vLLM-Omni LingBot Realtime World</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main>
+      <header>
+        <div>
+          <p class="eyebrow">vLLM-Omni</p>
+          <h1>LingBot Realtime World</h1>
+        </div>
+        <span id="status" class="status idle">Disconnected</span>
+      </header>
+
+      <section class="viewer">
+        <canvas id="world" width="832" height="480"></canvas>
+        <div class="stats">
+          <span>Chunk <strong id="chunk">-</strong></span>
+          <span>Latency <strong id="latency">-</strong></span>
+          <span>Buffer <strong id="buffer">0</strong></span>
+          <span>Applied <strong id="applied">-</strong></span>
+        </div>
+      </section>
+
+      <section class="panel config">
+        <label>WebSocket URL<input id="url" value="ws://127.0.0.1:8000/v1/realtime/world" /></label>
+        <label>Initial image<input id="image" type="file" accept="image/*" /></label>
+        <label class="wide">Prompt<textarea id="prompt">A stable first-person view moving through a coherent world.</textarea></label>
+        <label>Pixel format<select id="pixel-format"><option value="jpeg">JPEG</option><option value="webp">WebP</option></select></label>
+        <label>Quality<input id="quality" type="number" min="1" max="100" value="85" /></label>
+        <div class="actions wide">
+          <button id="connect" class="primary">Connect</button>
+          <button id="stop" disabled>Stop</button>
+          <button id="update-prompt" disabled>Update prompt</button>
+        </div>
+      </section>
+
+      <section class="panel controller">
+        <div>
+          <h2>Movement</h2>
+          <div class="key-grid movement">
+            <button data-key="w">W</button>
+            <button data-key="a">A</button>
+            <button data-key="s">S</button>
+            <button data-key="d">D</button>
+          </div>
+        </div>
+        <div>
+          <h2>Camera</h2>
+          <div class="key-grid camera">
+            <button data-key="i">I</button>
+            <button data-key="j">J</button>
+            <button data-key="k">K</button>
+            <button data-key="l">L</button>
+          </div>
+        </div>
+        <div class="help">
+          <p>Use the keyboard or hold the buttons.</p>
+          <p>W/S: forward/back · A/D: strafe · I/K: pitch · J/L: yaw</p>
+          <p>Held state is sampled at each generated chunk boundary.</p>
+        </div>
+      </section>
+
+      <details>
+        <summary>Protocol log</summary>
+        <pre id="log"></pre>
+      </details>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

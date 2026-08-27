@@ -7,7 +7,7 @@
 - Vendor: Robbyant
 - Model: `robbyant/lingbot-world-v2-14b-causal-fast-diffusers`
 - Task: image-conditioned interactive world generation
-- Modes: offline trajectory replay and in-process realtime AR-Diffusion ticks
+- Modes: offline trajectory replay, in-process ticks, and public realtime WebSocket
 - Hardware validated: NVIDIA H200 and B200
 - Maintainer: Community
 
@@ -56,17 +56,26 @@ python examples/offline_inference/diffusion/lingbot_world_v2_realtime.py \
   --gpu-memory-fraction 0.6
 ```
 
-The example writes one latent tensor and one metadata JSON file per chunk. It
-exercises the same `ARDiffusionSessionManager -> ARDiffusionOmniTickConsumer
--> AsyncOmni -> ARDiffusionEngine` path used by a future HTTP or WebSocket
-transport.
+The example writes one tensor and one metadata JSON file per chunk. It exercises
+the same `ARDiffusionSessionManager -> ARDiffusionOmniTickConsumer ->
+AsyncOmni -> ARDiffusionEngine` path used by the public transport.
 
-This PR intentionally does not define a public realtime HTTP/WebSocket schema.
-An online serving client should be added together with the public transport
-API rather than exposing LingBot-specific event fields from the generic model
-runtime. The structured camera-interaction frontend and transport work is
-tracked separately in
-[vllm-project/vllm-omni#5527](https://github.com/vllm-project/vllm-omni/pull/5527).
+## Public realtime WebSocket
+
+Start the two-GPU realtime deployment:
+
+```bash
+vllm serve robbyant/lingbot-world-v2-14b-causal-fast-diffusers \
+  --omni \
+  --stage-configs-path vllm_omni/deploy/lingbot_world_realtime.yaml \
+  --port 8000
+```
+
+`WS /v1/realtime/world` owns one persistent AR-Diffusion session. The browser
+sends `session.control` messages containing held WASD/IJKL state, and the
+server returns `video.chunk` metadata followed by binary JPEG/WebP frames. See
+the [realtime Web UI](../../examples/online_serving/lingbot_world_realtime/README.md)
+for the protocol and runnable frontend.
 
 ## Realtime identity and controls
 
@@ -104,14 +113,13 @@ tested commit.
 ## Current limitations
 
 - Only the 14B causal-fast checkpoint is supported.
-- The realtime control plane is internal; there is no public server transport yet.
+- The public realtime server currently admits one active world session.
 - AR-Diffusion stages currently require one replica because session-affine
   routing across replicas is not implemented.
 - One AR block is generated per request and `max_num_seqs` must be one.
-- Stateful streaming VAE decode is not implemented; the realtime example emits
-  latent chunks.
-- SP/USP, pipeline/CFG parallelism, HSDP, VAE parallelism, quantization,
-  Cache-DiT, TeaCache, causal-pretrain, and the 1.3B checkpoint are not claimed.
+- Pure Ulysses SP and spatial-shard VAE parallel decode are supported. Ring,
+  pipeline/CFG parallelism, HSDP, quantization, Cache-DiT, TeaCache,
+  causal-pretrain, and the 1.3B checkpoint are not claimed.
 - No AMD GPU, Ascend NPU, or Intel GPU support is claimed.
 
 ## References
@@ -120,3 +128,4 @@ tested commit.
 - Official implementation: <https://github.com/robbyant/lingbot-world-v2>
 - Offline example: [`examples/offline_inference/diffusion/lingbot_world_v2.py`](../../examples/offline_inference/diffusion/lingbot_world_v2.py)
 - Realtime design: [`docs/design/feature/realtime_ar_diffusion.md`](../../docs/design/feature/realtime_ar_diffusion.md)
+- Realtime Web UI: [`examples/online_serving/lingbot_world_realtime/`](../../examples/online_serving/lingbot_world_realtime/)

@@ -1,8 +1,8 @@
 # Realtime AR-Diffusion sessions
 
-> **Status:** experimental. This document describes the internal execution
-> contract implemented under `vllm_omni.experimental.ar_diffusion`. It does not
-> define a public HTTP or WebSocket schema.
+> **Status:** experimental. This document describes the execution contract under
+> `vllm_omni.experimental.ar_diffusion` and its public
+> `WS /v1/realtime/world` transport mapping.
 
 ## Scope
 
@@ -227,9 +227,6 @@ unsupported because independent tiles require separately routed session state.
 
 This contract does not currently provide:
 
-- a public HTTP or WebSocket request schema (the structured-interaction
-  frontend is tracked separately in
-  [#5527](https://github.com/vllm-project/vllm-omni/pull/5527));
 - camera/action semantics shared by every world model;
 - session migration or replication across workers;
 - retry of an ambiguous partially executed chunk; or
