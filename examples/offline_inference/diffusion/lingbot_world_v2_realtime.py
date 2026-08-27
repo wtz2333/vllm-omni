@@ -6,10 +6,8 @@ This example exercises the internal session API. It is not a public HTTP or
 WebSocket protocol. Each JSONL event advances the world by one three-latent
 frame AR block. Stateful Wan VAE decode emits 9 pixel frames for the first
 block and 12 for every later block, preserving causal-convolution state across
-ticks. ``--output-type latent`` keeps the original latent-only behavior. The current
-scoped implementation supports at most ten ticks per generation epoch because
-its image condition is bounded to 117 pixel frames; reset or create a session
-to start a new world.
+ticks. ``--output-type latent`` keeps the original latent-only behavior. A
+bounded blank-tail image condition supports open-ended contiguous realtime ticks.
 """
 
 from __future__ import annotations
@@ -29,8 +27,6 @@ if TYPE_CHECKING:
 _MODEL = "robbyant/lingbot-world-v2-14b-causal-fast-diffusers"
 _CAMERA_ACTION_SCHEMA = "lingbot.camera_actions.v1"
 _FRAMES_PER_BLOCK = 3
-# ((117 pixel frames - 1) / VAE temporal factor 4 + 1) / 3 latent frames.
-_MAX_REALTIME_TICKS = 10
 
 
 def _camera_event_data(frames: list[list[str]]) -> dict[str, Any]:
@@ -46,7 +42,7 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument(
         "--events",
         required=True,
-        help="JSONL file with one prompt/action event per AR block; at most 10 events.",
+        help="JSONL file with one prompt/action event per AR block.",
     )
     parser.add_argument("--output-dir", required=True, help="Directory for chunk tensors, metadata, and video.")
     parser.add_argument(
@@ -101,12 +97,6 @@ def _load_events(path: Path) -> list[dict[str, Any]]:
         events.append({"event_id": event_id, "prompt": prompt, "frames": frames})
     if not events:
         raise ValueError("events file must contain at least one event.")
-    if len(events) > _MAX_REALTIME_TICKS:
-        raise ValueError(
-            "events file must contain at most "
-            f"{_MAX_REALTIME_TICKS} events because the current LingBot realtime "
-            "image-condition horizon is 117 pixel frames."
-        )
     event_ids = [event["event_id"] for event in events]
     if event_ids != sorted(set(event_ids)):
         raise ValueError("event_id values must be unique and strictly increasing.")

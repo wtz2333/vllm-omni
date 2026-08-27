@@ -143,8 +143,9 @@ fraction to select additional resident sessions up to the model-declared cap.
 All model-owned reservations are deducted before the paged self-attention pool
 is allocated.
 
-LingBot always reports its persistent full-horizon image-condition tensor. If
-stateful VAE output is enabled it additionally reserves the shipped decoder's
+LingBot reports a bounded two-block image-condition tensor: the first block
+contains the initial image condition and the second is a reusable blank tail for
+all later ticks. If stateful VAE output is enabled it additionally reserves the shipped decoder's
 maximum-resolution causal cache with a conservative 4 GiB per-session upper
 bound. The direct BF16 decoder retains 1,888,573,440 logical bytes; the full
 worker execution path retained 3,728,824,320 storage bytes during validation.
@@ -202,7 +203,7 @@ The shipped causal geometry emits:
 
 - 9 pixel frames for the first three-latent-frame block (`1 + 4 + 4`);
 - 12 pixel frames for every later block (`4 + 4 + 4`); and
-- 117 frames for a complete ten-tick generation epoch.
+- an open-ended sequence of later blocks while the session remains active.
 
 Pixel chunks use the standard `payload.video` output envelope. The metadata
 retains `ar_diffusion` identity and adds video FPS/shape plus
