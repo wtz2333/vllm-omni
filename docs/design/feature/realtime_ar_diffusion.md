@@ -143,8 +143,13 @@ fraction to select additional resident sessions up to the model-declared cap.
 All model-owned reservations are deducted before the paged self-attention pool
 is allocated.
 
-LingBot reports its persistent full-horizon image-condition tensor. DreamZero
-reports the measured 603 MiB per-session Wan VAE causal-convolution state.
+LingBot always reports its persistent full-horizon image-condition tensor. If
+stateful VAE output is enabled it additionally reserves the shipped decoder's
+maximum-resolution causal cache with a conservative 4 GiB per-session upper
+bound. The direct BF16 decoder retains 1,888,573,440 logical bytes; the full
+worker execution path retained 3,728,824,320 storage bytes during validation.
+DreamZero reports the measured 603 MiB per-session Wan VAE
+causal-convolution state.
 
 ## Concurrency and routing limits
 
@@ -175,8 +180,36 @@ For LingBot World v2:
 - `lingbot_world/actions.py` parses key-state and trajectory controls;
 - `lingbot_world/camera.py` loads or constructs camera trajectories and Plücker embeddings;
 - `lingbot_world/transformer.py` implements checkpoint-compatible causal attention; and
-- `lingbot_world/pipeline.py` constructs conditioning, owns small non-KV session state, and
-  produces one block plus the standard metadata envelope.
+- `lingbot_world/pipeline.py` constructs conditioning, owns model session state, and
+  produces one latent or pixel block plus the standard metadata envelope.
+
+## Stateful streaming VAE decode
+
+LingBot pixel output is opt-in through
+`model_config.ar_diffusion_streaming_vae=true`. Latent output remains the
+default capability and does not allocate decoder state. An enabled session may
+choose `output_type="pt"`, `"np"`, or `"pil"`; it cannot switch between
+latent and pixel output after its first committed tick.
+
+`WanVAEStreamingDecodeState` owns one causal-convolution feature-cache list per
+session. It is passed explicitly into `OmniAutoencoderKLWan.decode_streaming()`;
+the VAE module's request-local `_feat_map` is never shared between worlds.
+Decoder state fixes batch size, latent spatial shape, dtype, and device on the
+first call. Reset, close, failed-forward cleanup, and LRU eviction all reach
+the pipeline lifecycle hook, which clears and drops the state.
+
+The shipped causal geometry emits:
+
+- 9 pixel frames for the first three-latent-frame block (`1 + 4 + 4`);
+- 12 pixel frames for every later block (`4 + 4 + 4`); and
+- 117 frames for a complete ten-tick generation epoch.
+
+Pixel chunks use the standard `payload.video` output envelope. The metadata
+retains `ar_diffusion` identity and adds video FPS/shape plus
+`streaming_video.pixel_frame_start` and `pixel_frame_count`. Spatial VAE
+tiling is rejected for stateful decode because each tile needs its own
+independent temporal cache; VAE patch parallelism remains outside LingBot's
+declared parallel support.
 
 ## Non-goals
 
@@ -187,9 +220,8 @@ This contract does not currently provide:
   [#5527](https://github.com/vllm-project/vllm-omni/pull/5527));
 - camera/action semantics shared by every world model;
 - session migration or replication across workers;
-- retry of an ambiguous partially executed chunk;
-- cross-stage KV transfer; or
-- stateful streaming VAE decode.
+- retry of an ambiguous partially executed chunk; or
+- cross-stage KV transfer.
 
 Those features can be layered on top without adding LingBot-specific identity
 or lifecycle fields to the generic runtime.
@@ -205,9 +237,12 @@ CPU contract tests cover:
 - capacity expansion under a tuned fraction;
 - DreamZero model-owned state accounting;
 - runner session reuse, reset, close, LRU eviction, and forward cleanup; and
-- LingBot model registration, imports, camera/action reduction, and one-block
-  output metadata.
+- Wan streaming decoder state isolation, shape locking, cache accounting, and
+  9/12-frame chunk geometry; and
+- LingBot model registration, imports, camera/action reduction, one-block
+  latent/pixel output metadata, opt-in validation, and lifecycle cleanup.
 
 GPU validation must additionally exercise real model loading, action input,
 prompt switching, rolling-window replacement, reset, close, finite output
-latents, and exact metadata/request identity.
+latents/pixels, 9/12-frame chunk boundaries, assembled-video decode, and exact
+metadata/request identity.

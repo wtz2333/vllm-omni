@@ -2,6 +2,7 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 
 from contextlib import nullcontext
+from dataclasses import dataclass
 from typing import Any
 
 import torch
@@ -9,6 +10,7 @@ import torch.distributed as dist
 from diffusers.models.autoencoders import AutoencoderKLWan
 from diffusers.models.autoencoders.autoencoder_kl_wan import unpatchify
 from diffusers.models.autoencoders.vae import DecoderOutput
+from diffusers.utils.accelerate_utils import apply_forward_hook
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.distributed.autoencoders import wan_spatial_shard
@@ -21,6 +23,65 @@ from vllm_omni.diffusion.distributed.autoencoders.distributed_vae_executor impor
 from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
+
+
+@dataclass
+class WanVAEStreamingDecodeState:
+    """Per-session causal-convolution state for incremental Wan VAE decode."""
+
+    feat_cache: list[Any]
+    decoded_latent_frames: int = 0
+    used_cache_slots: int = 0
+    batch_size: int | None = None
+    latent_height: int | None = None
+    latent_width: int | None = None
+    dtype: torch.dtype | None = None
+    device: torch.device | None = None
+
+    def bind_input(self, z: torch.Tensor) -> None:
+        if z.ndim != 5:
+            raise ValueError(f"Wan streaming VAE decode expects a 5D latent tensor, got shape {tuple(z.shape)}.")
+        if z.shape[0] != 1:
+            raise ValueError(f"Wan streaming VAE decode supports batch size 1, got {z.shape[0]}.")
+        if z.shape[2] <= 0:
+            raise ValueError("Wan streaming VAE decode requires at least one latent frame.")
+        signature = (int(z.shape[0]), int(z.shape[3]), int(z.shape[4]), z.dtype, z.device)
+        current = (self.batch_size, self.latent_height, self.latent_width, self.dtype, self.device)
+        if self.batch_size is None:
+            self.batch_size, self.latent_height, self.latent_width, self.dtype, self.device = signature
+        elif current != signature:
+            raise ValueError(
+                "Wan streaming VAE state cannot change batch, spatial shape, dtype, or device: "
+                f"expected {current}, got {signature}."
+            )
+
+    def nbytes(self) -> int:
+        """Return deduplicated storage bytes retained by the feature cache."""
+
+        storages: set[tuple[str, int | None, int, int]] = set()
+        total = 0
+        for value in self.feat_cache:
+            if not isinstance(value, torch.Tensor):
+                continue
+            storage = value.untyped_storage()
+            key = (value.device.type, value.device.index, storage.data_ptr(), storage.nbytes())
+            if key in storages:
+                continue
+            storages.add(key)
+            total += storage.nbytes()
+        return total
+
+    def clear(self) -> None:
+        """Drop every retained tensor and make the state reusable from frame zero."""
+
+        self.feat_cache[:] = [None] * len(self.feat_cache)
+        self.decoded_latent_frames = 0
+        self.used_cache_slots = 0
+        self.batch_size = None
+        self.latent_height = None
+        self.latent_width = None
+        self.dtype = None
+        self.device = None
 
 
 class OmniAutoencoderKLWan(AutoencoderKLWan):
@@ -47,6 +108,60 @@ class OmniAutoencoderKLWan(AutoencoderKLWan):
     def decode(self, z: torch.Tensor, return_dict: bool = True):
         with self._execution_context():
             return super().decode(z, return_dict=return_dict)
+
+    def create_streaming_decode_state(self) -> WanVAEStreamingDecodeState:
+        """Allocate an empty decoder cache owned by one external session."""
+
+        cached_counts = getattr(self, "_cached_conv_counts", None)
+        if not isinstance(cached_counts, dict):
+            raise RuntimeError("Wan VAE streaming decode requires cached decoder convolution counts.")
+        decoder_slots = int(cached_counts.get("decoder", 0))
+        if decoder_slots <= 0:
+            raise RuntimeError("Wan VAE streaming decode requires at least one decoder cache slot.")
+        return WanVAEStreamingDecodeState(feat_cache=[None] * decoder_slots)
+
+    @apply_forward_hook
+    def decode_streaming(
+        self,
+        z: torch.Tensor,
+        state: WanVAEStreamingDecodeState,
+        *,
+        return_dict: bool = True,
+    ) -> DecoderOutput | tuple[torch.Tensor]:
+        """Decode new latent frames while preserving causal state across calls."""
+
+        if not isinstance(state, WanVAEStreamingDecodeState):
+            raise TypeError("Wan streaming VAE decode requires WanVAEStreamingDecodeState.")
+        if self.use_tiling:
+            raise NotImplementedError("Wan stateful streaming VAE decode does not support spatial tiling.")
+        state.bind_input(z)
+        decoded_frames: list[torch.Tensor] = []
+        with self._execution_context():
+            x = self.post_quant_conv(z)
+            for frame_index in range(z.shape[2]):
+                feat_idx = [0]
+                decoded = self.decoder(
+                    x[:, :, frame_index : frame_index + 1],
+                    feat_cache=state.feat_cache,
+                    feat_idx=feat_idx,
+                    first_chunk=state.decoded_latent_frames == 0,
+                )
+                if feat_idx[0] > len(state.feat_cache):
+                    raise RuntimeError(
+                        "Wan decoder consumed more cache slots than allocated: "
+                        f"used={feat_idx[0]}, allocated={len(state.feat_cache)}."
+                    )
+                state.used_cache_slots = max(state.used_cache_slots, feat_idx[0])
+                state.decoded_latent_frames += 1
+                decoded_frames.append(decoded)
+
+        output = torch.cat(decoded_frames, dim=2)
+        if self.config.patch_size is not None:
+            output = unpatchify(output, patch_size=self.config.patch_size)
+        output = torch.clamp(output, min=-1.0, max=1.0)
+        if not return_dict:
+            return (output,)
+        return DecoderOutput(sample=output)
 
 
 class DistributedAutoencoderKLWan(OmniAutoencoderKLWan, DistributedVaeMixin):

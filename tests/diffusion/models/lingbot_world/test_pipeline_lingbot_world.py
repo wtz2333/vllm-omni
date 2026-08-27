@@ -181,6 +181,8 @@ class _StubVAE(_FakePretrained):
         )
         self.encode_inputs: list[torch.Tensor] = []
         self.decode_inputs: list[torch.Tensor] = []
+        self.streaming_decode_inputs: list[torch.Tensor] = []
+        self.streaming_decode_states: list[SimpleNamespace] = []
         self.on_decode = None
 
     def encode(self, video: torch.Tensor):
@@ -215,6 +217,38 @@ class _StubVAE(_FakePretrained):
         )
         return (decoded,)
 
+    def create_streaming_decode_state(self):
+        state = SimpleNamespace(
+            decoded_latent_frames=0,
+            cleared=False,
+            nbytes=lambda: 128,
+        )
+
+        def clear():
+            state.cleared = True
+            state.decoded_latent_frames = 0
+
+        state.clear = clear
+        self.streaming_decode_states.append(state)
+        return state
+
+    def decode_streaming(self, latents, state, *, return_dict=False):
+        del return_dict
+        self.streaming_decode_inputs.append(latents.detach().clone())
+        first_chunk = state.decoded_latent_frames == 0
+        state.decoded_latent_frames += latents.shape[2]
+        pixel_frames = (latents.shape[2] - 1) * 4 + 1 if first_chunk else latents.shape[2] * 4
+        decoded = torch.zeros(
+            latents.shape[0],
+            3,
+            pixel_frames,
+            latents.shape[-2] * 8,
+            latents.shape[-1] * 8,
+            dtype=latents.dtype,
+            device=latents.device,
+        )
+        return (decoded,)
+
 
 class _SamplingParams:
     def __init__(
@@ -229,6 +263,7 @@ class _SamplingParams:
         generator: torch.Generator | None = None,
         output_type: str | None = "latent",
         max_sequence_length: int | None = 512,
+        fps: float | None = 16,
         extra_args: dict | None = None,
         include_action: bool = True,
     ) -> None:
@@ -245,6 +280,7 @@ class _SamplingParams:
         )
         self.output_type = output_type
         self.max_sequence_length = max_sequence_length
+        self.fps = fps
         self.extra_args = {"action_path": "."} if include_action else {}
         self.extra_args["_lingbot_camera_trajectory"] = _CameraTrajectory(
             poses=torch.eye(4).repeat(32, 1, 1),
@@ -447,6 +483,22 @@ def test_ar_diffusion_capability_uses_fixed_tp_local_lingbot_geometry() -> None:
     assert [(branch.name, branch.local_index) for branch in spec.kv_branches] == [("main", 0)]
     assert spec.cross_attention_lengths == {"text": 512}
     assert spec.model_owned_state_bytes_per_session == 9_600
+
+
+def test_ar_diffusion_capability_reserves_max_streaming_vae_cache() -> None:
+    module = _load_pipeline_module()
+    module.get_tensor_model_parallel_world_size = lambda: 1
+    model_config = {
+        "lingbot_action_root": str(_ROOT),
+        "ar_diffusion_height": 16,
+        "ar_diffusion_width": 16,
+        "ar_diffusion_streaming_vae": True,
+    }
+    pipeline = _pipeline(module, od_config=_od_config(model_config=model_config))
+
+    spec = pipeline.ar_diffusion_kv_cache_spec()
+
+    assert spec.model_owned_state_bytes_per_session == 9_600 + module._MAX_STREAMING_VAE_CACHE_BYTES
 
 
 def test_preprocess_materializes_external_inputs_before_worker_execution(tmp_path: Path) -> None:
@@ -714,6 +766,35 @@ def test_postprocess_uses_the_standard_diffusion_output_envelope(monkeypatch) ->
 
     assert output == {"payload": {"video": processed_video}, "metadata": {}}
     assert calls == [(video, "np")]
+
+
+def test_postprocess_converts_video_inside_metadata_envelope(monkeypatch) -> None:
+    import diffusers.video_processor as video_processor_module
+
+    module = _load_pipeline_module()
+    processed_video = object()
+
+    class VideoProcessor:
+        def __init__(self, *, vae_scale_factor):
+            assert vae_scale_factor == 8
+
+        def postprocess_video(self, video, *, output_type):
+            assert output_type == "pt"
+            return processed_video
+
+    monkeypatch.setattr(video_processor_module, "VideoProcessor", VideoProcessor)
+    postprocess = module.get_lingbot_world_post_process_func(_od_config())
+    envelope = {
+        "payload": {"video": torch.randn(1, 3, 9, 8, 8)},
+        "metadata": {"video": {"fps": 16}},
+    }
+
+    output = postprocess(envelope, sampling_params=SimpleNamespace(output_type="pt"))
+
+    assert output == {
+        "payload": {"video": processed_video},
+        "metadata": {"video": {"fps": 16}},
+    }
 
 
 def test_forward_propagates_pipeline_profiler_stage_durations() -> None:
@@ -1514,6 +1595,101 @@ def test_typed_ticks_generate_one_global_block_and_return_standard_metadata(
     expected_second = torch.randn((1, 16, 3, 2, 2), generator=expected_generator)
     torch.testing.assert_close(generated[0]["block"], expected_first)
     torch.testing.assert_close(generated[1]["block"], expected_second)
+
+
+def test_typed_ticks_statefully_decode_nine_then_twelve_pixel_frames(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_pipeline_module()
+    model_config = {
+        "lingbot_action_root": str(_ROOT),
+        "ar_diffusion_height": 16,
+        "ar_diffusion_width": 16,
+        "ar_diffusion_streaming_vae": True,
+    }
+    pipeline = _pipeline(module, od_config=_od_config(model_config=model_config))
+    pipeline._ar_diffusion_kv_state = object()
+    monkeypatch.setattr(pipeline, "_ar_text_caches", lambda *args, **kwargs: [SimpleNamespace()])
+    monkeypatch.setattr(
+        pipeline,
+        "_generate_block",
+        lambda **kwargs: torch.zeros_like(kwargs["condition"][:, :16]),
+    )
+
+    first_sampling = _SamplingParams(output_type="pt", extra_args=_tick_extra_args(chunk_index=0))
+    second_sampling = _SamplingParams(output_type="pt", extra_args=_tick_extra_args(chunk_index=1))
+    first = pipeline(_request(sampling=first_sampling))
+    second = pipeline(_request(sampling=second_sampling))
+
+    assert first.output["payload"]["video"].shape == (1, 3, 9, 16, 16)
+    assert second.output["payload"]["video"].shape == (1, 3, 12, 16, 16)
+    assert first.output["metadata"]["streaming_video"] == {
+        "pixel_frame_start": 0,
+        "pixel_frame_count": 9,
+    }
+    assert second.output["metadata"]["streaming_video"] == {
+        "pixel_frame_start": 9,
+        "pixel_frame_count": 12,
+    }
+    assert len(pipeline.vae.streaming_decode_states) == 1
+    stream_state = pipeline.vae.streaming_decode_states[0]
+    assert stream_state.decoded_latent_frames == 6
+    assert pipeline._ar_sessions["world-1"].vae_decode_state is stream_state
+
+    pipeline.reset_ar_diffusion_session("world-1")
+    assert stream_state.cleared
+    assert "world-1" not in pipeline._ar_sessions
+
+
+def test_typed_tick_pixel_output_requires_streaming_vae_opt_in(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_pipeline_module()
+    pipeline = _pipeline(module)
+    pipeline._ar_diffusion_kv_state = object()
+    monkeypatch.setattr(
+        pipeline,
+        "encode_prompt",
+        lambda *args, **kwargs: pytest.fail("pixel output must fail before prompt encoding"),
+    )
+
+    sampling = _SamplingParams(output_type="pt", extra_args=_tick_extra_args(chunk_index=0))
+
+    with pytest.raises(ValueError, match="ar_diffusion_streaming_vae=true"):
+        pipeline(_request(sampling=sampling))
+
+
+def test_typed_tick_rejects_switch_from_latent_to_pixel_output(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    module = _load_pipeline_module()
+    model_config = {
+        "lingbot_action_root": str(_ROOT),
+        "ar_diffusion_height": 16,
+        "ar_diffusion_width": 16,
+        "ar_diffusion_streaming_vae": True,
+    }
+    pipeline = _pipeline(module, od_config=_od_config(model_config=model_config))
+    pipeline._ar_diffusion_kv_state = object()
+    monkeypatch.setattr(pipeline, "_ar_text_caches", lambda *args, **kwargs: [SimpleNamespace()])
+    monkeypatch.setattr(
+        pipeline,
+        "_generate_block",
+        lambda **kwargs: torch.zeros_like(kwargs["condition"][:, :16]),
+    )
+
+    pipeline(
+        _request(
+            sampling=_SamplingParams(
+                output_type="latent",
+                extra_args=_tick_extra_args(chunk_index=0),
+            )
+        )
+    )
+    switched = _SamplingParams(output_type="pt", extra_args=_tick_extra_args(chunk_index=1))
+
+    with pytest.raises(ValueError, match="cannot switch between latent and pixel output"):
+        pipeline(_request(sampling=switched))
 
 
 def test_typed_action_ticks_integrate_camera_across_chunks(

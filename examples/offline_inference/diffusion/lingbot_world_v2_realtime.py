@@ -4,7 +4,9 @@
 
 This example exercises the internal session API. It is not a public HTTP or
 WebSocket protocol. Each JSONL event advances the world by one three-latent
-frame AR block and writes the latent plus its identity metadata. The current
+frame AR block. Stateful Wan VAE decode emits 9 pixel frames for the first
+block and 12 for every later block, preserving causal-convolution state across
+ticks. ``--output-type latent`` keeps the original latent-only behavior. The current
 scoped implementation supports at most ten ticks per generation epoch because
 its image condition is bounded to 117 pixel frames; reset or create a session
 to start a new world.
@@ -19,7 +21,10 @@ import math
 import time
 from collections.abc import Sequence
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    import torch
 
 _MODEL = "robbyant/lingbot-world-v2-14b-causal-fast-diffusers"
 _CAMERA_ACTION_SCHEMA = "lingbot.camera_actions.v1"
@@ -43,11 +48,23 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
         required=True,
         help="JSONL file with one prompt/action event per AR block; at most 10 events.",
     )
-    parser.add_argument("--output-dir", required=True, help="Directory for chunk latents and metadata.")
+    parser.add_argument("--output-dir", required=True, help="Directory for chunk tensors, metadata, and video.")
+    parser.add_argument(
+        "--output-type",
+        choices=("latent", "pt"),
+        default="pt",
+        help="Emit latent tensors or statefully decoded pixel chunks.",
+    )
+    parser.add_argument(
+        "--output-video",
+        default=None,
+        help="Pixel mode MP4 path; defaults to <output-dir>/lingbot_world_realtime.mp4.",
+    )
     parser.add_argument("--session-id", default="lingbot-world", help="Persistent world session identifier.")
     parser.add_argument("--height", type=int, default=480)
     parser.add_argument("--width", type=int, default=832)
     parser.add_argument("--seed", type=int, default=42)
+    parser.add_argument("--fps", type=int, default=16)
     parser.add_argument("--gpu-memory-fraction", type=float, default=0.1)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--enforce-eager", action="store_true")
@@ -110,9 +127,35 @@ def _validate_args(args: argparse.Namespace) -> tuple[Path, Path, Path]:
         raise ValueError("--height and --width must be positive multiples of 16.")
     if args.tensor_parallel_size <= 0:
         raise ValueError("--tensor-parallel-size must be positive.")
+    if args.fps <= 0:
+        raise ValueError("--fps must be positive.")
     if not math.isfinite(args.gpu_memory_fraction) or not 0 < args.gpu_memory_fraction <= 1:
         raise ValueError("--gpu-memory-fraction must be in (0, 1].")
     return image, events, output_dir
+
+
+def _pixel_chunk(
+    value: Any,
+    *,
+    expected_frames: int,
+    height: int,
+    width: int,
+) -> torch.Tensor:
+    import torch
+
+    if not isinstance(value, torch.Tensor):
+        raise RuntimeError("Expected a tensor pixel chunk from stateful VAE decode.")
+    chunk = value.detach().float().cpu()
+    if chunk.ndim == 5 and chunk.shape[0] == 1:
+        chunk = chunk[0]
+    if chunk.ndim != 4 or chunk.shape[1:] != (3, height, width):
+        raise RuntimeError(
+            "Expected stateful VAE pixel chunk shape "
+            f"[{expected_frames}, 3, {height}, {width}], got {tuple(chunk.shape)}."
+        )
+    if chunk.shape[0] != expected_frames:
+        raise RuntimeError(f"Expected {expected_frames} decoded frames, got {chunk.shape[0]}.")
+    return chunk
 
 
 async def run(argv: Sequence[str] | None = None) -> Path:
@@ -146,6 +189,7 @@ async def run(argv: Sequence[str] | None = None) -> Path:
         model_config={
             "ar_diffusion_height": args.height,
             "ar_diffusion_width": args.width,
+            "ar_diffusion_streaming_vae": args.output_type != "latent",
             "ar_diffusion_kv_config": {
                 "gpu_memory_fraction": args.gpu_memory_fraction,
                 "warmup_cudagraph": True,
@@ -159,7 +203,8 @@ async def run(argv: Sequence[str] | None = None) -> Path:
         num_inference_steps=4,
         max_sequence_length=512,
         seed=args.seed,
-        output_type="latent",
+        fps=args.fps,
+        output_type=args.output_type,
         extra_args={"flow_shift": 5.0},
     )
     consumer = ARDiffusionOmniTickConsumer(
@@ -179,6 +224,7 @@ async def run(argv: Sequence[str] | None = None) -> Path:
     )
     session = await manager.create_session(args.session_id)
     measurements: list[dict[str, Any]] = []
+    pixel_chunks: list[torch.Tensor] = []
     try:
         for chunk_index, event in enumerate(events):
             controls = ()
@@ -202,11 +248,26 @@ async def run(argv: Sequence[str] | None = None) -> Path:
             started = time.perf_counter()
             output = await session.next_chunk()
             elapsed = time.perf_counter() - started
-            if len(output.images) != 1 or not isinstance(output.images[0], torch.Tensor):
-                raise RuntimeError("Expected one latent tensor from each realtime LingBot chunk.")
-            latent = output.images[0].detach().float().cpu()
             metadata = consumer.chunk_metadata(output).to_dict()
-            torch.save(latent, output_dir / f"chunk_{chunk_index:03d}.pt")
+            if len(output.images) != 1:
+                raise RuntimeError("Expected exactly one output from each realtime LingBot chunk.")
+            if args.output_type == "latent":
+                if not isinstance(output.images[0], torch.Tensor):
+                    raise RuntimeError("Expected one latent tensor from each realtime LingBot chunk.")
+                chunk = output.images[0].detach().float().cpu()
+                expected_shape = (1, 16, 3, args.height // 8, args.width // 8)
+                if tuple(chunk.shape) != expected_shape:
+                    raise RuntimeError(f"Expected latent shape {expected_shape}, got {tuple(chunk.shape)}.")
+            else:
+                expected_frames = 9 if chunk_index == 0 else 12
+                chunk = _pixel_chunk(
+                    output.images[0],
+                    expected_frames=expected_frames,
+                    height=args.height,
+                    width=args.width,
+                )
+                pixel_chunks.append(chunk)
+            torch.save(chunk, output_dir / f"chunk_{chunk_index:03d}.pt")
             (output_dir / f"chunk_{chunk_index:03d}.json").write_text(
                 json.dumps(metadata, indent=2, sort_keys=True) + "\n"
             )
@@ -214,8 +275,9 @@ async def run(argv: Sequence[str] | None = None) -> Path:
                 {
                     "chunk_index": chunk_index,
                     "latency_seconds": elapsed,
-                    "shape": list(latent.shape),
-                    "finite": bool(torch.isfinite(latent).all()),
+                    "output_type": args.output_type,
+                    "shape": list(chunk.shape),
+                    "finite": bool(torch.isfinite(chunk).all()),
                     "metadata": metadata,
                 }
             )
@@ -226,8 +288,38 @@ async def run(argv: Sequence[str] | None = None) -> Path:
         finally:
             engine.shutdown()
 
+    video_path: Path | None = None
+    if pixel_chunks:
+        from diffusers.utils import export_to_video
+
+        frames = torch.cat(pixel_chunks, dim=0)
+        expected_total_frames = 9 + max(0, len(events) - 1) * 12
+        if frames.shape != (expected_total_frames, 3, args.height, args.width):
+            raise RuntimeError(
+                f"Expected assembled pixel video shape [{expected_total_frames}, 3, {args.height}, {args.width}], "
+                f"got {tuple(frames.shape)}."
+            )
+        video_path = (
+            Path(args.output_video).expanduser().resolve()
+            if args.output_video
+            else output_dir / "lingbot_world_realtime.mp4"
+        )
+        video_path.parent.mkdir(parents=True, exist_ok=True)
+        export_to_video(frames.permute(0, 2, 3, 1).numpy(), str(video_path), fps=args.fps)
+
     summary_path = output_dir / "summary.json"
-    summary_path.write_text(json.dumps({"chunks": measurements}, indent=2, sort_keys=True) + "\n")
+    summary_path.write_text(
+        json.dumps(
+            {
+                "output_type": args.output_type,
+                "video_path": str(video_path) if video_path is not None else None,
+                "chunks": measurements,
+            },
+            indent=2,
+            sort_keys=True,
+        )
+        + "\n"
+    )
     return summary_path
 
 

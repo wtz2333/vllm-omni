@@ -22,7 +22,10 @@ from vllm.distributed import get_tensor_model_parallel_world_size
 from vllm.model_executor.models.utils import AutoWeightsLoader
 
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
-from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl_wan import DistributedAutoencoderKLWan
+from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl_wan import (
+    DistributedAutoencoderKLWan,
+    WanVAEStreamingDecodeState,
+)
 from vllm_omni.diffusion.distributed.utils import get_local_device
 from vllm_omni.diffusion.forward_context import set_forward_context_denoise_step_idx
 from vllm_omni.diffusion.model_loader.diffusers_loader import DiffusersPipelineLoader
@@ -82,6 +85,11 @@ _PREPROCESSED_CAMERA_ACTIONS_KEY = "_lingbot_camera_actions"
 _SOURCE_IMAGE_ERROR = (
     "Unable to load multi_modal_data.image; expected a decodable image within 4096 * 4096 source pixels."
 )
+_REALTIME_PIXEL_OUTPUT_TYPES = frozenset({"np", "pil", "pt"})
+# The direct BF16 decoder retains 1,888,573,440 logical bytes at 480x832.
+# Worker-side execution retains up to 3,728,824,320 storage bytes. Reserve a
+# round 4 GiB upper bound so AR capacity planning remains conservative.
+_MAX_STREAMING_VAE_CACHE_BYTES = 4 * 1024**3
 
 
 @dataclass(frozen=True)
@@ -97,6 +105,7 @@ class _LingBotRequestInputs:
     num_frames: int
     num_latent_frames: int
     output_type: str
+    fps: float
     max_sequence_length: int
     flow_shift: float
     generator: torch.Generator
@@ -112,6 +121,8 @@ class _LingBotARSessionState:
     image_condition: torch.Tensor | None = None
     camera_tail: CameraTrajectory | None = None
     camera_pitch: float = 0.0
+    output_kind: str | None = None
+    vae_decode_state: WanVAEStreamingDecodeState | None = None
 
 
 def _positive_finite_flow_shift(value: Any) -> float:
@@ -359,10 +370,17 @@ def get_lingbot_world_post_process_func(od_config: OmniDiffusionConfig) -> Calla
         output_type: str = "np",
         sampling_params: Any | None = None,
     ) -> Any:
-        if isinstance(video, dict) and isinstance(video.get("payload"), dict):
-            return video
         if sampling_params is not None:
             output_type = getattr(sampling_params, "output_type", None) or output_type
+        if isinstance(video, dict) and isinstance(video.get("payload"), dict):
+            payload = dict(video["payload"])
+            pixel_video = payload.get("video")
+            if isinstance(pixel_video, torch.Tensor):
+                payload["video"] = video_processor.postprocess_video(pixel_video, output_type=output_type)
+            return {
+                "payload": payload,
+                "metadata": dict(video.get("metadata") or {}),
+            }
         if output_type == "latent":
             return video
         return {
@@ -488,12 +506,18 @@ class LingBotWorldCausalDMDPipeline(
         model_config = getattr(od_config, "model_config", None) or {}
         self._ar_height = int(model_config.get("ar_diffusion_height", 480))
         self._ar_width = int(model_config.get("ar_diffusion_width", 832))
+        streaming_vae = model_config.get("ar_diffusion_streaming_vae", False)
+        if not isinstance(streaming_vae, bool):
+            raise ValueError("model_config.ar_diffusion_streaming_vae must be a boolean.")
+        self._ar_streaming_vae_enabled = streaming_vae
+        self._ar_streaming_vae_reserved_bytes = _MAX_STREAMING_VAE_CACHE_BYTES if streaming_vae else 0
         self._ar_diffusion_kv_state: ARDiffusionKVState | None = None
         self._ar_sessions: dict[str, _LingBotARSessionState] = {}
         self.setup_diffusion_pipeline_profiler(
             profiler_targets=[
                 "vae.encode",
                 "vae.decode",
+                "vae.decode_streaming",
                 "_generate_block",
                 "text_encoder.forward",
                 "tokenizer.forward",
@@ -548,7 +572,7 @@ class LingBotWorldCausalDMDPipeline(
                     _MAX_SEQUENCE_LENGTH,
                 ),
             ),
-            model_owned_state_bytes_per_session=condition_bytes_per_session,
+            model_owned_state_bytes_per_session=(condition_bytes_per_session + self._ar_streaming_vae_reserved_bytes),
         )
 
     @contextmanager
@@ -567,11 +591,16 @@ class LingBotWorldCausalDMDPipeline(
         finally:
             self._ar_diffusion_kv_state = None
 
+    def _drop_ar_diffusion_session(self, session_id: str) -> None:
+        session = self._ar_sessions.pop(session_id, None)
+        if session is not None and session.vae_decode_state is not None:
+            session.vae_decode_state.clear()
+
     def reset_ar_diffusion_session(self, session_id: str) -> None:
-        self._ar_sessions.pop(session_id, None)
+        self._drop_ar_diffusion_session(session_id)
 
     def close_ar_diffusion_session(self, session_id: str) -> None:
-        self._ar_sessions.pop(session_id, None)
+        self._drop_ar_diffusion_session(session_id)
 
     def _parse_request(self, req: DiffusionRequestBatch) -> _LingBotRequestInputs:
         if req.num_reqs != 1 or len(req.prompts) != 1:
@@ -715,6 +744,16 @@ class LingBotWorldCausalDMDPipeline(
         if max_sequence_length != _MAX_SEQUENCE_LENGTH:
             raise ValueError(f"max_sequence_length must be exactly {_MAX_SEQUENCE_LENGTH}.")
 
+        raw_fps = getattr(sampling, "fps", None)
+        if raw_fps is None:
+            fps = 16.0
+        elif isinstance(raw_fps, bool) or not isinstance(raw_fps, (int, float)):
+            raise ValueError("fps must be a positive finite number.")
+        else:
+            fps = float(raw_fps)
+        if not math.isfinite(fps) or fps <= 0:
+            raise ValueError("fps must be a positive finite number.")
+
         return _LingBotRequestInputs(
             prompt=prompt.strip(),
             image=image,
@@ -725,6 +764,7 @@ class LingBotWorldCausalDMDPipeline(
             num_frames=num_frames,
             num_latent_frames=num_latent_frames,
             output_type=getattr(sampling, "output_type", None) or "np",
+            fps=fps,
             max_sequence_length=max_sequence_length,
             flow_shift=flow_shift,
             generator=generator,
@@ -1076,6 +1116,42 @@ class LingBotWorldCausalDMDPipeline(
             state.commit_paged_context(self._AR_BRANCH)
         return current_latents
 
+    def _decode_realtime_block(
+        self,
+        generated_latents: torch.Tensor,
+        session_state: _LingBotARSessionState,
+        *,
+        expected_pixel_frames: int,
+    ) -> torch.Tensor:
+        if session_state.vae_decode_state is None:
+            session_state.vae_decode_state = self.vae.create_streaming_decode_state()
+        latent_mean, latent_std = self._vae_latent_stats(generated_latents)
+        vae_latents = (generated_latents * latent_std + latent_mean).to(dtype=self.vae.dtype)
+        decoded = self.vae.decode_streaming(
+            vae_latents,
+            session_state.vae_decode_state,
+            return_dict=False,
+        )[0]
+        expected_shape = (
+            1,
+            3,
+            expected_pixel_frames,
+            generated_latents.shape[-2] * self.vae_scale_factor_spatial,
+            generated_latents.shape[-1] * self.vae_scale_factor_spatial,
+        )
+        if tuple(decoded.shape) != expected_shape:
+            raise RuntimeError(
+                "stateful Wan VAE returned an incompatible realtime chunk shape: "
+                f"expected {expected_shape}, got {tuple(decoded.shape)}."
+            )
+        retained_bytes = session_state.vae_decode_state.nbytes()
+        if retained_bytes > self._ar_streaming_vae_reserved_bytes:
+            raise RuntimeError(
+                "LingBot streaming VAE cache exceeded its AR-Diffusion reservation: "
+                f"retained={retained_bytes}, reserved={self._ar_streaming_vae_reserved_bytes}."
+            )
+        return decoded
+
     def encode_prompt(
         self,
         prompt: str,
@@ -1107,6 +1183,12 @@ class LingBotWorldCausalDMDPipeline(
             raise ValueError("LingBot ARDiffusionEngine requests must carry ar_diffusion_tick.")
         session_state: _LingBotARSessionState | None = None
         if tick is not None:
+            if inputs.output_type != "latent" and inputs.output_type not in _REALTIME_PIXEL_OUTPUT_TYPES:
+                raise ValueError(
+                    f"LingBot realtime output_type must be 'latent', 'np', 'pil', or 'pt'; got {inputs.output_type!r}."
+                )
+            if inputs.output_type != "latent" and not self._ar_streaming_vae_enabled:
+                raise ValueError("LingBot realtime pixel output requires model_config.ar_diffusion_streaming_vae=true.")
             if tick.prompt is not None and " ".join(tick.prompt.split()) != " ".join(inputs.prompt.split()):
                 raise ValueError("ar_diffusion_tick.prompt must match the standard request prompt.")
             block_frames = int(self.transformer.config.num_frames_per_block)
@@ -1140,6 +1222,14 @@ class LingBotWorldCausalDMDPipeline(
                     "LingBot chunk_index must be contiguous within a session: "
                     f"expected {session_state.next_chunk_index}, got "
                     f"{tick.chunk_index}."
+                )
+            output_kind = "latent" if inputs.output_type == "latent" else "video"
+            if session_state.output_kind is None:
+                session_state.output_kind = output_kind
+            elif session_state.output_kind != output_kind:
+                raise ValueError(
+                    "LingBot realtime sessions cannot switch between latent and pixel output: "
+                    f"started with {session_state.output_kind!r}, got {output_kind!r}."
                 )
         schedule = _build_shifted_flow_schedule(
             flow_shift=inputs.flow_shift,
@@ -1262,15 +1352,32 @@ class LingBotWorldCausalDMDPipeline(
         # Phase 4: either expose model-space latents or invert the checkpoint's
         # latent normalization and decode to pixel-space video.
         if tick is not None:
-            if inputs.output_type != "latent":
-                raise ValueError(
-                    "LingBot realtime ticks currently require output_type='latent'; "
-                    "stateful streaming VAE decode is a separate integration step."
+            chunk_metadata = ARDiffusionChunkMetadata.from_tick(tick).to_dict()
+            if inputs.output_type == "latent":
+                output = {
+                    "payload": {"latents": generated_latents},
+                    "metadata": {"ar_diffusion": chunk_metadata},
+                }
+            else:
+                assert session_state is not None
+                expected_pixel_frames = 9 if tick.chunk_index == 0 else 12
+                decoded = self._decode_realtime_block(
+                    generated_latents,
+                    session_state,
+                    expected_pixel_frames=expected_pixel_frames,
                 )
-            output = {
-                "payload": {"latents": generated_latents},
-                "metadata": {"ar_diffusion": ARDiffusionChunkMetadata.from_tick(tick).to_dict()},
-            }
+                pixel_frame_start = 0 if tick.chunk_index == 0 else 9 + (tick.chunk_index - 1) * 12
+                output = {
+                    "payload": {"video": decoded},
+                    "metadata": {
+                        "ar_diffusion": chunk_metadata,
+                        "video": {"fps": inputs.fps, "shape": list(decoded.shape)},
+                        "streaming_video": {
+                            "pixel_frame_start": pixel_frame_start,
+                            "pixel_frame_count": expected_pixel_frames,
+                        },
+                    },
+                }
         elif inputs.output_type == "latent":
             output = generated_latents
         else:
