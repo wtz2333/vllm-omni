@@ -278,7 +278,10 @@ class OmniRealtimeWorldHandler:
             get_default_sampling_params_list,
         )
         from vllm_omni.entrypoints.openai.utils import get_stage_type
-        from vllm_omni.experimental.ar_diffusion.consumer import ARDiffusionOmniTickConsumer
+        from vllm_omni.experimental.ar_diffusion.consumer import (
+            ARDiffusionOmniTickConsumer,
+            omni_prompt_for_ar_tick,
+        )
         from vllm_omni.experimental.ar_diffusion.session import (
             ARDiffusionSessionManager,
             ARDiffusionWorkerLifecycle,
@@ -316,10 +319,10 @@ class OmniRealtimeWorldHandler:
         )
         consumer = ARDiffusionOmniTickConsumer(
             self._engine_client,
-            prompt_provider=lambda tick: {
-                "prompt": tick.prompt,
-                "multi_modal_data": {"image": image},
-            },
+            prompt_provider=lambda tick: omni_prompt_for_ar_tick(
+                tick,
+                init_multi_modal_data={"image": image},
+            ),
             sampling_params_list=sampling_params_list,
             diffusion_stage_id=diffusion_stage_id,
         )
