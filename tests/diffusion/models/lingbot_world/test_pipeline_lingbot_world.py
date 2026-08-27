@@ -414,12 +414,14 @@ def _od_config(**overrides):
         "enforce_eager": True,
         "parallel_config": SimpleNamespace(
             pipeline_parallel_size=1,
+            tensor_parallel_size=1,
             sequence_parallel_size=1,
             ulysses_degree=1,
             ring_degree=1,
             allgather_degree=1,
             cfg_parallel_size=1,
             vae_patch_parallel_size=1,
+            vae_parallel_mode="tile",
             use_hsdp=False,
             enable_expert_parallel=False,
         ),
@@ -652,7 +654,6 @@ def test_component_discovery_uses_official_checkpoint_contract() -> None:
     [
         ("pipeline_parallel_size", 2, "pipeline parallelism"),
         ("cfg_parallel_size", 2, "CFG parallelism"),
-        ("vae_patch_parallel_size", 2, "VAE parallelism"),
         ("use_hsdp", True, "HSDP"),
         ("enable_expert_parallel", True, "expert parallelism"),
     ],
@@ -686,6 +687,30 @@ def test_non_ulysses_sequence_parallelism_is_rejected() -> None:
     parallel_config.ring_degree = 2
 
     with pytest.raises(NotImplementedError, match="pure Ulysses"):
+        module.LingBotWorldCausalDMDPipeline(od_config=_od_config(parallel_config=parallel_config))
+
+
+def test_spatial_vae_parallel_config_is_supported() -> None:
+    module = _load_pipeline_module()
+    parallel_config = _od_config().parallel_config
+    parallel_config.sequence_parallel_size = 2
+    parallel_config.ulysses_degree = 2
+    parallel_config.vae_patch_parallel_size = 2
+    parallel_config.vae_parallel_mode = "spatial_shard_height"
+
+    pipeline = module.LingBotWorldCausalDMDPipeline(od_config=_od_config(parallel_config=parallel_config))
+
+    assert pipeline.vae is not None
+
+
+def test_stateful_vae_parallel_rejects_tile_mode() -> None:
+    module = _load_pipeline_module()
+    parallel_config = _od_config().parallel_config
+    parallel_config.sequence_parallel_size = 2
+    parallel_config.ulysses_degree = 2
+    parallel_config.vae_patch_parallel_size = 2
+
+    with pytest.raises(NotImplementedError, match="spatial_shard_height or spatial_shard_width"):
         module.LingBotWorldCausalDMDPipeline(od_config=_od_config(parallel_config=parallel_config))
 
 

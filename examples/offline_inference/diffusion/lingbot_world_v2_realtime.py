@@ -64,6 +64,12 @@ def parse_args(argv: Sequence[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--gpu-memory-fraction", type=float, default=0.1)
     parser.add_argument("--tensor-parallel-size", type=int, default=1)
     parser.add_argument("--ulysses-degree", type=int, default=1)
+    parser.add_argument("--vae-patch-parallel-size", type=int, default=1)
+    parser.add_argument(
+        "--vae-parallel-mode",
+        choices=("spatial_shard_height", "spatial_shard_width"),
+        default="spatial_shard_height",
+    )
     parser.add_argument("--enforce-eager", action="store_true")
     return parser.parse_args(argv)
 
@@ -178,6 +184,8 @@ async def run(argv: Sequence[str] | None = None) -> Path:
         parallel_config=DiffusionParallelConfig(
             tensor_parallel_size=args.tensor_parallel_size,
             ulysses_degree=args.ulysses_degree,
+            vae_patch_parallel_size=args.vae_patch_parallel_size,
+            vae_parallel_mode=args.vae_parallel_mode,
         ),
         max_num_seqs=1,
         model_config={

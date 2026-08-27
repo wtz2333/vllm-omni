@@ -1,4 +1,5 @@
 import os
+from contextlib import nullcontext
 from types import SimpleNamespace
 
 import pytest
@@ -10,6 +11,7 @@ from tests.helpers.mark import hardware_test
 from vllm_omni.diffusion.distributed.autoencoders import wan_spatial_shard
 from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl_wan import (
     DistributedAutoencoderKLWan,
+    WanVAEStreamingDecodeState,
 )
 from vllm_omni.platforms import current_omni_platform
 
@@ -452,6 +454,52 @@ def test_tile_mode_disables_spatial_shard_decode():
     assert vae._spatial_shard_decode_enabled(z) is False
 
 
+@pytest.mark.core_model
+@pytest.mark.cpu
+def test_spatial_shard_streaming_decode_reuses_explicit_state(monkeypatch: pytest.MonkeyPatch):
+    first_chunk_flags = []
+
+    class Decoder:
+        def __call__(self, hidden_states, *, feat_cache, feat_idx, first_chunk):
+            first_chunk_flags.append(first_chunk)
+            feat_cache[0] = hidden_states[:, :, -1:].clone()
+            feat_idx[0] = 1
+            frames = 1 if first_chunk else 4
+            return hidden_states.new_zeros(
+                hidden_states.shape[0],
+                3,
+                frames,
+                hidden_states.shape[-2],
+                hidden_states.shape[-1],
+            )
+
+    monkeypatch.setattr(wan_spatial_shard, "install_wan_spatial_shard_decode", lambda *args, **kwargs: None)
+    monkeypatch.setattr(wan_spatial_shard, "_rank_world", lambda group: (0, 1))
+    vae = SimpleNamespace(
+        decoder=Decoder(),
+        post_quant_conv=lambda value: value,
+        config=SimpleNamespace(patch_size=None),
+        _execution_context=nullcontext,
+    )
+    state = WanVAEStreamingDecodeState(feat_cache=[None])
+    first_latents = torch.zeros(1, 16, 3, 2, 2)
+    next_latents = torch.ones(1, 16, 3, 2, 2)
+
+    first = wan_spatial_shard.spatial_shard_decode_streaming(
+        vae, first_latents, state, group=object(), return_dict=False
+    )[0]
+    second = wan_spatial_shard.spatial_shard_decode_streaming(
+        vae, next_latents, state, group=object(), return_dict=False
+    )[0]
+
+    assert first.shape == (1, 3, 9, 2, 2)
+    assert second.shape == (1, 3, 12, 2, 2)
+    assert first_chunk_flags == [True, False, False, False, False, False]
+    assert state.decoded_latent_frames == 6
+    assert state.used_cache_slots == 1
+    assert torch.equal(state.feat_cache[0], next_latents[:, :, -1:])
+
+
 # =============================================================================
 # Multi-GPU numerical-correctness test (nightly Diffusion Test group, H100 x2)
 #
@@ -521,14 +569,22 @@ def _spatial_shard_decode_worker(rank: int, split_dim: str, return_dict, master_
             vae.use_tiling = True
             vae.set_parallel_size(_SPATIAL_SHARD_WORLD_SIZE, mode=f"spatial_shard_{split_dim}")
             sharded = vae.decode(latents, return_dict=False)[0].float()
+            streaming_state = vae.create_streaming_decode_state()
+            streaming_first = vae.decode_streaming(latents[:, :, :3], streaming_state, return_dict=False)[0].float()
+            streaming_second = vae.decode_streaming(latents[:, :, 3:], streaming_state, return_dict=False)[0].float()
 
         # Only rank 0 assembles the full decoded sample (matching broadcast_result=False);
         # non-zero ranks return an empty placeholder, so the comparison runs on rank 0 only.
         if rank == 0:
             diff = (sharded - reference).abs()
+            streamed = torch.cat((streaming_first, streaming_second), dim=2)
+            streaming_diff = (streamed - reference).abs()
             return_dict["max_abs_diff"] = diff.max().item()
             return_dict["mean_abs_diff"] = diff.mean().item()
+            return_dict["streaming_max_abs_diff"] = streaming_diff.max().item()
+            return_dict["streaming_mean_abs_diff"] = streaming_diff.mean().item()
             return_dict["shape"] = tuple(sharded.shape)
+            return_dict["streaming_shape"] = tuple(streamed.shape)
     finally:
         destroy_model_parallel()
         if dist.is_initialized():
@@ -556,13 +612,25 @@ def test_spatial_shard_decode_matches_reference(split_dim: str):
     assert "max_abs_diff" in return_dict, "rank 0 did not report a result"
     max_abs_diff = return_dict["max_abs_diff"]
     mean_abs_diff = return_dict["mean_abs_diff"]
+    streaming_max_abs_diff = return_dict["streaming_max_abs_diff"]
+    streaming_mean_abs_diff = return_dict["streaming_mean_abs_diff"]
     print(
         f"spatial_shard_{split_dim} vs reference: max_abs_diff={max_abs_diff:.6e} "
-        f"mean_abs_diff={mean_abs_diff:.6e} shape={return_dict.get('shape')}"
+        f"mean_abs_diff={mean_abs_diff:.6e} shape={return_dict.get('shape')} "
+        f"streaming_max_abs_diff={streaming_max_abs_diff:.6e} "
+        f"streaming_mean_abs_diff={streaming_mean_abs_diff:.6e} "
+        f"streaming_shape={return_dict.get('streaming_shape')}"
     )
     assert max_abs_diff <= _SPATIAL_SHARD_TOLERANCE, (
         f"spatial_shard_{split_dim} max_abs_diff {max_abs_diff} exceeds {_SPATIAL_SHARD_TOLERANCE}"
     )
     assert mean_abs_diff <= _SPATIAL_SHARD_TOLERANCE, (
         f"spatial_shard_{split_dim} mean_abs_diff {mean_abs_diff} exceeds {_SPATIAL_SHARD_TOLERANCE}"
+    )
+    assert streaming_max_abs_diff <= _SPATIAL_SHARD_TOLERANCE, (
+        f"streaming spatial_shard_{split_dim} max_abs_diff {streaming_max_abs_diff} exceeds {_SPATIAL_SHARD_TOLERANCE}"
+    )
+    assert streaming_mean_abs_diff <= _SPATIAL_SHARD_TOLERANCE, (
+        f"streaming spatial_shard_{split_dim} mean_abs_diff {streaming_mean_abs_diff} "
+        f"exceeds {_SPATIAL_SHARD_TOLERANCE}"
     )

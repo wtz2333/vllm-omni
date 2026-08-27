@@ -184,7 +184,6 @@ def _validate_parallel_config(od_config: OmniDiffusionConfig) -> None:
     unsupported_sizes = {
         "pipeline_parallel_size": "pipeline parallelism",
         "cfg_parallel_size": "CFG parallelism",
-        "vae_patch_parallel_size": "VAE parallelism",
     }
     for field, feature in unsupported_sizes.items():
         size = getattr(parallel_config, field, 1) or 1
@@ -200,6 +199,22 @@ def _validate_parallel_config(od_config: OmniDiffusionConfig) -> None:
             f"sequence_parallel_size={sequence_parallel_size}, ulysses_degree={ulysses_degree}, "
             f"ring_degree={ring_degree}, allgather_degree={allgather_degree}."
         )
+    vae_parallel_size = getattr(parallel_config, "vae_patch_parallel_size", 1) or 1
+    if vae_parallel_size > 1:
+        vae_parallel_mode = getattr(parallel_config, "vae_parallel_mode", "tile")
+        if vae_parallel_mode not in {"spatial_shard_height", "spatial_shard_width"}:
+            raise NotImplementedError(
+                "LingBot stateful VAE parallel decode requires vae_parallel_mode to be "
+                f"spatial_shard_height or spatial_shard_width, got {vae_parallel_mode!r}."
+            )
+        tensor_parallel_size = getattr(parallel_config, "tensor_parallel_size", 1) or 1
+        dit_parallel_size = tensor_parallel_size * sequence_parallel_size
+        if vae_parallel_size != dit_parallel_size:
+            raise NotImplementedError(
+                "LingBot spatial VAE parallel decode currently requires "
+                "vae_patch_parallel_size to match the DIT group size: "
+                f"vae={vae_parallel_size}, dit={dit_parallel_size}."
+            )
     if getattr(parallel_config, "use_hsdp", False):
         raise NotImplementedError("LingBot World v1 does not support HSDP.")
     if getattr(parallel_config, "enable_expert_parallel", False):
@@ -1151,7 +1166,10 @@ class LingBotWorldCausalDMDPipeline(
             generated_latents.shape[-2] * self.vae_scale_factor_spatial,
             generated_latents.shape[-1] * self.vae_scale_factor_spatial,
         )
-        if tuple(decoded.shape) != expected_shape:
+        if decoded.numel() == 0:
+            if not self.vae._spatial_shard_decode_enabled(vae_latents):
+                raise RuntimeError("stateful Wan VAE returned an empty realtime chunk.")
+        elif tuple(decoded.shape) != expected_shape:
             raise RuntimeError(
                 "stateful Wan VAE returned an incompatible realtime chunk shape: "
                 f"expected {expected_shape}, got {tuple(decoded.shape)}."

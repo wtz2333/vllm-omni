@@ -216,10 +216,12 @@ The shipped causal geometry emits:
 
 Pixel chunks use the standard `payload.video` output envelope. The metadata
 retains `ar_diffusion` identity and adds video FPS/shape plus
-`streaming_video.pixel_frame_start` and `pixel_frame_count`. Spatial VAE
-tiling is rejected for stateful decode because each tile needs its own
-independent temporal cache; VAE patch parallelism remains outside LingBot's
-declared parallel support.
+`streaming_video.pixel_frame_start` and `pixel_frame_count`. Stateful decode
+supports `spatial_shard_height` and `spatial_shard_width` when
+`vae_patch_parallel_size` matches the full DiT group. Each rank owns the
+temporal cache for its spatial shard and participates in halo exchange; rank 0
+assembles the emitted pixel chunk. Tile-parallel stateful decode remains
+unsupported because independent tiles require separately routed session state.
 
 ## Non-goals
 

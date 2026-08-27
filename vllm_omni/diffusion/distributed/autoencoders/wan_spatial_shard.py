@@ -835,3 +835,54 @@ def spatial_shard_decode(
     if not return_dict:
         return (out,)
     return DecoderOutput(sample=out)
+
+
+def spatial_shard_decode_streaming(
+    vae: Any,
+    z: torch.Tensor,
+    state: Any,
+    *,
+    group: dist.ProcessGroup,
+    return_dict: bool = True,
+    split_dim: str = "height",
+) -> DecoderOutput | tuple[torch.Tensor]:
+    """Decode new latent frames with spatial halos and persistent temporal cache."""
+
+    install_wan_spatial_shard_decode(vae, group, split_dim=split_dim)
+    state.bind_input(z)
+    rank, world_size = _rank_world(group)
+    produce_output = world_size <= 1 or rank == 0
+
+    context = vae._execution_context() if hasattr(vae, "_execution_context") else nullcontext()
+    with context:
+        hidden_states = vae.post_quant_conv(z)
+        decoded_frames = []
+        for frame_index in range(z.shape[2]):
+            feat_idx = [0]
+            decoded = vae.decoder(
+                hidden_states[:, :, frame_index : frame_index + 1],
+                feat_cache=state.feat_cache,
+                feat_idx=feat_idx,
+                first_chunk=state.decoded_latent_frames == 0,
+            )
+            if feat_idx[0] > len(state.feat_cache):
+                raise RuntimeError(
+                    "Wan spatial streaming decoder consumed more cache slots than allocated: "
+                    f"used={feat_idx[0]}, allocated={len(state.feat_cache)}."
+                )
+            state.used_cache_slots = max(state.used_cache_slots, feat_idx[0])
+            state.decoded_latent_frames += 1
+            if produce_output:
+                decoded_frames.append(decoded)
+
+    if produce_output:
+        output = torch.cat(decoded_frames, dim=2)
+        if vae.config.patch_size is not None:
+            output = unpatchify(output, patch_size=vae.config.patch_size)
+        output = torch.clamp(output, min=-1.0, max=1.0)
+    else:
+        output = z.new_zeros(0)
+
+    if not return_dict:
+        return (output,)
+    return DecoderOutput(sample=output)

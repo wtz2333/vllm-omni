@@ -418,6 +418,27 @@ class DistributedAutoencoderKLWan(OmniAutoencoderKLWan, DistributedVaeMixin):
             return False
         return True
 
+    def decode_streaming(
+        self,
+        z: torch.Tensor,
+        state: WanVAEStreamingDecodeState,
+        *,
+        return_dict: bool = True,
+    ) -> DecoderOutput | tuple[torch.Tensor]:
+        if self._spatial_shard_decode_enabled(z):
+            split_dim = self._spatial_shard_decode_split_dim()
+            assert split_dim is not None
+            logger.debug("Streaming decode running with Wan VAE spatial_shard_%s mode", split_dim)
+            return wan_spatial_shard.spatial_shard_decode_streaming(
+                self,
+                z,
+                state,
+                group=self.distributed_executor.group,
+                return_dict=return_dict,
+                split_dim=split_dim,
+            )
+        return super().decode_streaming(z, state, return_dict=return_dict)
+
     def tiled_decode(self, z: torch.Tensor, return_dict: bool = True):
         if not self.is_distributed_enabled():
             return super().tiled_decode(z, return_dict=return_dict)
