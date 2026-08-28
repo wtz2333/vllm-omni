@@ -255,6 +255,8 @@ class _SamplingParams:
         if extra_args is not None:
             self.extra_args.update(extra_args)
         self.latents = None
+        self.guidance_scale = None
+        self.guidance_scale_2 = None
 
 
 class _RequestBatch:
