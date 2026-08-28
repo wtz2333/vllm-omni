@@ -145,8 +145,14 @@ def test_compute_num_blocks():
     assert compute_num_blocks(1 << 20, 0.5, 16 << 10) == 32
 
 
-def test_paged_pool_layout_exposes_flat_slot_views():
-    kv_pools, k_pools, v_pools = allocate_kv_pool_with_views(
+def test_paged_pool_layout_owns_flat_storage():
+    """K/V pools must own storage so torch.compile can mutate them in-place.
+
+    Views of a packed ``(2, num_blocks, ...)`` allocation are functionalized
+    with a clone; the compiled DiT block does not copy that clone back, so
+    committed history KV would disappear on the next AR tick.
+    """
+    k_pools, v_pools = allocate_kv_pool_with_views(
         num_blocks=4,
         block_size=BLOCK,
         num_layers=1,
@@ -155,14 +161,18 @@ def test_paged_pool_layout_exposes_flat_slot_views():
         dtype=torch.float32,
         device=torch.device("cpu"),
     )
-    assert kv_pools[0].shape == (2, 4, BLOCK, 4, 64)
     assert k_pools[0].shape == (4 * BLOCK, 4, 64)
     assert v_pools[0].shape == (4 * BLOCK, 4, 64)
+    assert k_pools[0]._base is None
+    assert v_pools[0]._base is None
+    assert k_pools[0].untyped_storage().data_ptr() != v_pools[0].untyped_storage().data_ptr()
 
+    k_cache = k_pools[0].unflatten(0, (4, BLOCK))
+    v_cache = v_pools[0].unflatten(0, (4, BLOCK))
     k_pools[0][BLOCK + 3].fill_(7)
     v_pools[0][2 * BLOCK + 5].fill_(11)
-    assert torch.equal(kv_pools[0][0, 1, 3], k_pools[0][BLOCK + 3])
-    assert torch.equal(kv_pools[0][1, 2, 5], v_pools[0][2 * BLOCK + 5])
+    assert torch.equal(k_cache[1, 3], k_pools[0][BLOCK + 3])
+    assert torch.equal(v_cache[2, 5], v_pools[0][2 * BLOCK + 5])
 
 
 def test_build_manager_allocate_free_roundtrip():
