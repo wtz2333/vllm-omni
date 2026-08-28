@@ -7,8 +7,9 @@ Cosmos port) reuses unchanged. Three concerns live here:
 * **Slot mapping** — absolute token positions → physical KV-cache slots, the
   standard PagedAttention layout ``slot(pos) = block_id(pos) * block_size +
   (pos % block_size)``.
-* **Pool I/O** — allocate per-layer FlashAttention-compatible paged K/V pools
-  plus flat compatibility views for direct slot writes.
+* **Pool I/O** — allocate per-layer owning flat K/V pools for slot writes.
+  FlashAttention's ``(num_blocks, block_size, H, D)`` layout is an unflatten
+  view of the same storage, used only on the eager read path.
 * **Chunk-window eviction** — a ``SlidingWindowSpec`` subclass whose unit is a
   *chunk* (``sliding_window = window_chunks * chunk_size``) plus a manager that
   evicts at chunk boundaries. Memory policy / refcounting / ``null_block``
@@ -91,23 +92,24 @@ def allocate_kv_pool_with_views(
     head_dim: int,
     dtype: torch.dtype,
     device: torch.device,
-) -> tuple[list[torch.Tensor], list[torch.Tensor], list[torch.Tensor]]:
-    """Allocate vLLM-style paged KV pools plus flat slot-write views.
+) -> tuple[list[torch.Tensor], list[torch.Tensor]]:
+    """Allocate per-layer owning K/V pools for paged slot writes.
 
-    The owning tensor follows FlashAttention's block-table cache layout:
-    ``(2, num_blocks, block_size, num_kv_heads, head_dim)``, where dim-0 is
-    ``[K, V]``.  The flat K/V views keep ``slot = block_id * block_size +
-    offset`` writes simple without changing the kernel-facing cache layout.
+    Each pool owns its storage and has shape
+    ``(num_blocks * block_size, num_kv_heads, head_dim)``.  K and V are
+    independent allocations so ``torch.compile`` / Inductor can mutate them
+    in-place: a view of a packed ``(2, num_blocks, ...)`` base is
+    functionalized with a clone, and the compiled DiT block does not copy
+    that clone back into the Python-side pool.
+
+    FlashAttention's ``(num_blocks, block_size, num_kv_heads, head_dim)``
+    layout is ``pool.unflatten(0, (num_blocks, block_size))`` — a view of
+    the same storage, used only on the eager read path.
     """
-    kv_pools: list[torch.Tensor] = []
-    k_pools: list[torch.Tensor] = []
-    v_pools: list[torch.Tensor] = []
-    for _ in range(num_layers):
-        kv = torch.empty(2, num_blocks, block_size, num_kv_heads, head_dim, dtype=dtype, device=device)
-        kv_pools.append(kv)
-        k_pools.append(kv[0].reshape(num_blocks * block_size, num_kv_heads, head_dim))
-        v_pools.append(kv[1].reshape(num_blocks * block_size, num_kv_heads, head_dim))
-    return kv_pools, k_pools, v_pools
+    slot_shape = (num_blocks * block_size, num_kv_heads, head_dim)
+    k_pools = [torch.empty(slot_shape, dtype=dtype, device=device) for _ in range(num_layers)]
+    v_pools = [torch.empty(slot_shape, dtype=dtype, device=device) for _ in range(num_layers)]
+    return k_pools, v_pools
 
 
 def pool_write_chunk(

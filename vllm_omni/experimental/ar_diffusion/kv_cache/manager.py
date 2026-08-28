@@ -350,11 +350,12 @@ class ARDiffusionKVCache:
         self.null_block_id = self.manager.block_pool.null_block.block_id
 
         # Allocate the per-layer paged K/V pools on the given device.
-        self._kv_pools: list[torch.Tensor] = []
+        # Owning flat tensors (not views of a packed (2, num_blocks, ...)
+        # allocation) so torch.compile can mutate them in-place.
         self._k_pools: list[torch.Tensor] = []
         self._v_pools: list[torch.Tensor] = []
         if device is not None:
-            self._kv_pools, self._k_pools, self._v_pools = allocate_kv_pool_with_views(
+            self._k_pools, self._v_pools = allocate_kv_pool_with_views(
                 self.num_blocks_total,
                 block_size,
                 num_layers,
@@ -591,10 +592,10 @@ class ARDiffusionKVCache:
         return list(range(base, base + count))
 
     def key_cache(self, layer_idx: int) -> torch.Tensor:
-        return self._kv_pools[layer_idx][0]
+        return self._k_pools[layer_idx].unflatten(0, (-1, self.block_size))
 
     def value_cache(self, layer_idx: int) -> torch.Tensor:
-        return self._kv_pools[layer_idx][1]
+        return self._v_pools[layer_idx].unflatten(0, (-1, self.block_size))
 
     def window_block_ids(self, adapter: ARDiffusionRequestAdapter) -> list[int]:
         """Resident (non-null) managed blocks visible to paged attention."""

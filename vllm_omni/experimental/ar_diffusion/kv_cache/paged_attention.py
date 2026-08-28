@@ -468,9 +468,10 @@ def ar_diffusion_paged_attention(
 # One opaque op per layer keeps the compiled DiT block fullgraph: dynamo treats
 # it as a single graph node (no eager island, no graph breaks), and the K/V slot
 # writes happen inside the op so write→read ordering with the block-table kernel
-# is internal. The flat pools are explicit mutable inputs: Inductor/CUDA Graph
-# must track their storage lifetime instead of observing an undeclared mutation
-# through a process-global registry.
+# is internal. The pools must *own* their storage (not views of a packed
+# ``(2, num_blocks, ...)`` tensor) and are explicit mutable inputs: Inductor
+# functionalizes view mutations with a clone that the compiled block does not
+# copy back, so history KV would be lost on the next tick.
 def _paged_write_attn_impl(
     query: torch.Tensor,
     k_curr: torch.Tensor,
