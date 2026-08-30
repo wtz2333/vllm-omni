@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Typed pipeline contract for the model-neutral AR-Diffusion runtime."""
 
 from __future__ import annotations

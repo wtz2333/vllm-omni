@@ -75,21 +75,25 @@ motion for this landing is a request-scoped `camera_action_script` (one
 three-frame action list per chunk). Live mid-request WASD and public
 WebSocket serving are not part of this path.
 
+Build `AsyncOmni` with `engine_backend` pointing at `ARDiffusionEngine`,
+`step_execution=True`, `diffusion_streaming_output=True`, and `max_num_seqs=1`;
+keep `output_type="latent"`. Pass the per-chunk camera actions through
+`sampling_params.extra_args["camera_action_script"]`, then iterate the streamed
+outputs of a single `generate()` call. Identity metadata uses
+`session_id = request_id` with contiguous `chunk_index` values from zero.
+
+The executable reference is the end-to-end test
+[`tests/e2e/offline_inference/test_lingbot_world_v2_stepwise.py`](../../tests/e2e/offline_inference/test_lingbot_world_v2_stepwise.py):
+
 ```bash
-python examples/offline_inference/diffusion/lingbot_world_v2_stepwise.py \
-  --image /path/to/first_frame.png \
-  --prompt "A road through a forest" \
-  --events /path/to/events.jsonl \
-  --output-dir /tmp/lingbot-stepwise \
-  --gpu-memory-fraction 0.6
+cd tests
+VLLM_OMNI_LINGBOT_WORLD_V2_CHECKPOINT_PATH=/path/to/checkpoint \
+VLLM_OMNI_LINGBOT_WORLD_V2_IMAGE_PATH=/path/to/first_frame.png \
+pytest -s -v e2e/offline_inference/test_lingbot_world_v2_stepwise.py -m "slow and diffusion"
 ```
 
-`AsyncOmni` is constructed with `engine_backend` pointing at
-`ARDiffusionEngine`, `step_execution=True`, `diffusion_streaming_output=True`,
-and `max_num_seqs=1`. Output remains `output_type="latent"`. Identity
-metadata uses `session_id = request_id` and contiguous `chunk_index` values
-from zero. The tick example remains available for the older one-block-per-
-`generate()` control plane.
+The tick example remains available for the older one-block-per-`generate()`
+control plane.
 
 ## Realtime identity and controls
 
@@ -143,5 +147,5 @@ tested commit.
 - Checkpoint: <https://huggingface.co/robbyant/lingbot-world-v2-14b-causal-fast-diffusers>
 - Official implementation: <https://github.com/robbyant/lingbot-world-v2>
 - Offline example: [`examples/offline_inference/diffusion/lingbot_world_v2.py`](../../examples/offline_inference/diffusion/lingbot_world_v2.py)
-- Stepwise example: [`examples/offline_inference/diffusion/lingbot_world_v2_stepwise.py`](../../examples/offline_inference/diffusion/lingbot_world_v2_stepwise.py)
+- Stepwise end-to-end test: [`tests/e2e/offline_inference/test_lingbot_world_v2_stepwise.py`](../../tests/e2e/offline_inference/test_lingbot_world_v2_stepwise.py)
 - Realtime design: [`docs/design/feature/realtime_ar_diffusion.md`](../../docs/design/feature/realtime_ar_diffusion.md)
