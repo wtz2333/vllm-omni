@@ -1,4 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """CPU contracts for capability-driven AR-Diffusion sessions."""
 
 from __future__ import annotations
@@ -10,6 +11,7 @@ from types import SimpleNamespace
 import pytest
 import torch
 
+from vllm_omni.diffusion.sched.interface import CachedRequestData, DiffusionSchedulerOutput
 from vllm_omni.diffusion.worker.diffusion_model_runner import DiffusionModelRunner
 from vllm_omni.experimental.ar_diffusion.capability import (
     ARDiffusionCrossAttentionKVSpec,
@@ -135,6 +137,22 @@ class StepCapablePipeline(CapablePipeline):
         return DiffusionOutput()
 
 
+def scheduler_output(
+    request_ids: tuple[str, ...] = ("req-1",),
+    *,
+    finished: tuple[str, ...] = (),
+) -> DiffusionSchedulerOutput:
+    """Build the real scheduler payload; stepwise requests arrive as cached rows."""
+    return DiffusionSchedulerOutput(
+        step_id=0,
+        scheduled_new_reqs=[],
+        scheduled_cached_reqs=CachedRequestData(request_ids=list(request_ids)),
+        finished_req_ids=set(finished),
+        num_running_reqs=len(request_ids),
+        num_waiting_reqs=0,
+    )
+
+
 def make_runner(
     pipeline: object,
     *,
@@ -161,6 +179,7 @@ def make_runner(
     runner._sessions = OrderedDict()
     runner._session_capacity = 0
     runner._perf_e2e_times = []
+    runner._stepwise_chunk_started = {}
     runner._preallocate_kv_cache(available_bytes=available_bytes)
     return runner
 
@@ -471,7 +490,7 @@ def test_execute_stepwise_binds_request_id_session_and_unbinds_after_call(monkey
         return BatchRunnerOutput.from_list([RunnerOutput(request_id="req-1", finished=False)])
 
     monkeypatch.setattr(DiffusionModelRunner, "execute_stepwise", fake_execute)
-    output = runner.execute_stepwise(SimpleNamespace(scheduled_request_ids=["req-1"]))
+    output = runner.execute_stepwise(scheduler_output())
 
     assert bound_during == [True]
     assert pipeline.bound_state is None
@@ -492,7 +511,7 @@ def test_execute_stepwise_closes_session_when_request_finishes(monkeypatch):
         return BatchRunnerOutput.from_list([RunnerOutput(request_id="req-1", finished=True)])
 
     monkeypatch.setattr(DiffusionModelRunner, "execute_stepwise", fake_execute)
-    runner.execute_stepwise(SimpleNamespace(scheduled_request_ids=["req-1"]))
+    runner.execute_stepwise(scheduler_output())
 
     assert pipeline.bound_state is None
     assert pipeline.closes == ["req-1"]
@@ -510,13 +529,55 @@ def test_execute_stepwise_exception_releases_kv_and_does_not_resume_pages(monkey
 
     monkeypatch.setattr(DiffusionModelRunner, "execute_stepwise", boom)
     with pytest.raises(RuntimeError, match="step failed"):
-        runner.execute_stepwise(SimpleNamespace(scheduled_request_ids=["req-1"]))
+        runner.execute_stepwise(scheduler_output())
 
     assert pipeline.bound_state is None
     assert pipeline.closes == ["req-1"]
     assert "req-1" not in runner._sessions
     second = runner._get_or_create_session("req-1")
     assert second is not first
+
+
+def test_execute_stepwise_closes_session_for_scheduler_aborted_request(monkeypatch):
+    from vllm_omni.diffusion.worker.utils import BatchRunnerOutput
+
+    pipeline = StepCapablePipeline(lingbot_like_spec())
+    runner = make_runner(pipeline, step_execution=True)
+    runner._get_or_create_session("req-1")
+
+    def fake_execute(self, scheduler_output):
+        del self, scheduler_output
+        return BatchRunnerOutput.from_list([])
+
+    monkeypatch.setattr(DiffusionModelRunner, "execute_stepwise", fake_execute)
+    # An aborted request is never scheduled again and never reports finished,
+    # so the retire path is the only thing that can free its KV.
+    runner.execute_stepwise(scheduler_output(request_ids=(), finished=("req-1",)))
+
+    assert "req-1" not in runner._sessions
+    assert pipeline.closes == ["req-1"]
+
+
+def test_execute_stepwise_times_once_per_chunk_not_once_per_step(monkeypatch):
+    from vllm_omni.diffusion.data import DiffusionOutput
+    from vllm_omni.diffusion.worker.utils import BatchRunnerOutput, RunnerOutput
+
+    pipeline = StepCapablePipeline(lingbot_like_spec())
+    runner = make_runner(pipeline, step_execution=True)
+    results = [None, None, None, DiffusionOutput()]
+
+    def fake_execute(self, scheduler_output):
+        del self, scheduler_output
+        return BatchRunnerOutput.from_list([RunnerOutput(request_id="req-1", finished=False, result=results.pop(0))])
+
+    monkeypatch.setattr(DiffusionModelRunner, "execute_stepwise", fake_execute)
+    for _ in range(4):
+        runner.execute_stepwise(scheduler_output())
+
+    # Four denoise steps, one emitted AR block: one timing sample, matching the
+    # one-sample-per-block meaning request mode already has.
+    assert len(runner._perf_e2e_times) == 1
+    assert "req-1" not in runner._stepwise_chunk_started
 
 
 def test_model_specific_warmup_provider_is_consumed(monkeypatch):
