@@ -106,6 +106,11 @@ vllm serve robbyant/lingbot-world-v2-14b-causal-fast-diffusers \
   --port 8000
 ```
 
+`--deploy-config` is required: the `lingbot_world` pipeline deliberately
+registers no default deploy config, so offline replay and the tick example
+keep their request-mode topology when no deploy config is given, and the
+stepwise serving topology is only ever an explicit choice.
+
 Clients then use the generic WebSocket protocol documented in
 [`docs/serving/video_stream_api.md`](../../docs/serving/video_stream_api.md):
 `session.start` begins one rollout and each AR block arrives as a binary video
@@ -166,7 +171,12 @@ tested commit.
 ## Current limitations
 
 - Only the 14B causal-fast checkpoint is supported.
-- The realtime control plane is internal; there is no public server transport yet.
+- The tick control plane is internal; the public transport is the stepwise
+  `WS /v1/realtime/video` path, which cannot take mid-session camera
+  interaction yet.
+- Stepwise serving requires an explicit
+  `--deploy-config vllm_omni/deploy/lingbot_world_v2_stepwise.yaml`; there is
+  no default deploy config for this model.
 - AR-Diffusion stages currently require one replica because session-affine
   routing across replicas is not implemented.
 - Tick mode generates one AR block per request. Stepwise mode generates many
