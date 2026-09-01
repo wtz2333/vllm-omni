@@ -14,6 +14,18 @@
 The checkpoint is separately licensed under CC BY-NC-SA and restricted to
 non-commercial use. The vLLM-Omni integration code remains Apache-2.0.
 
+## Which path to use
+
+There are two ways to drive this model, and they are documented separately
+below.
+
+- **Stepwise one-request streaming** is the suggested path: one
+  `AsyncOmni.generate()` (or one `WS /v1/realtime/video` session) produces the
+  whole rollout. It cannot take realtime camera interaction yet; that is being
+  added, and this path is the one that will remain.
+- **The `ARDiffusionSessionManager` tick loop** is the older experimental path.
+  It supports realtime camera interaction today but will be superseded.
+
 ## Offline generation
 
 The offline path consumes one source image and an action directory containing
@@ -61,10 +73,10 @@ exercises the same `ARDiffusionSessionManager -> ARDiffusionOmniTickConsumer
 -> AsyncOmni -> ARDiffusionEngine` path used by a future HTTP or WebSocket
 transport.
 
-This recipe does not define a public realtime HTTP/WebSocket schema.
-An online serving client should be added together with the public transport
-API rather than exposing LingBot-specific event fields from the generic model
-runtime.
+Realtime serving now goes through the generic `WS /v1/realtime/video`
+transport; see [Streaming video serving](#streaming-video-serving) below. The
+tick loop above stays available for the older control plane, and no
+LingBot-specific event fields are exposed by the transport.
 
 ## Stepwise one-request generation
 
@@ -82,15 +94,38 @@ keep `output_type="latent"`. Pass the per-chunk camera actions through
 outputs of a single `generate()` call. Identity metadata uses
 `session_id = request_id` with contiguous `chunk_index` values from zero.
 
-The executable reference is the end-to-end test
-[`tests/e2e/offline_inference/test_lingbot_world_v2_stepwise.py`](../../tests/e2e/offline_inference/test_lingbot_world_v2_stepwise.py):
+## Streaming video serving
+
+Serve the stepwise path with the AR-Diffusion deploy config, which selects the
+AR-Diffusion engine and enables streamed step execution:
 
 ```bash
-cd tests
-VLLM_OMNI_LINGBOT_WORLD_V2_CHECKPOINT_PATH=/path/to/checkpoint \
-VLLM_OMNI_LINGBOT_WORLD_V2_IMAGE_PATH=/path/to/first_frame.png \
-pytest -s -v e2e/offline_inference/test_lingbot_world_v2_stepwise.py -m "slow and diffusion"
+vllm serve robbyant/lingbot-world-v2-14b-causal-fast-diffusers \
+  --omni \
+  --deploy-config vllm_omni/deploy/lingbot_world_v2_stepwise.yaml \
+  --port 8000
 ```
+
+Clients then use the generic WebSocket protocol documented in
+[`docs/serving/video_stream_api.md`](../../docs/serving/video_stream_api.md):
+`session.start` begins one rollout and each AR block arrives as a binary video
+chunk. Per-chunk camera actions ride on `extra_params`:
+
+```json
+{"type": "session.start", "model": "robbyant/lingbot-world-v2-14b-causal-fast-diffusers",
+ "prompt": "The camera moves slowly forward through the scene.",
+ "width": 832, "height": 480, "num_frames": 33,
+ "extra_params": {"flow_shift": 5.0,
+                  "camera_action_script": [[["w"], ["w"], ["w"]], [["a"], [], []], [[], [], []]]}}
+```
+
+Requested `width`/`height` must match `ar_diffusion_width`/`ar_diffusion_height`
+in the deploy config, because the AR cache geometry is fixed at load time.
+Blocks are decoded independently, so seams between chunks are possible; a
+session-owned streaming decoder is tracked separately.
+
+Mid-session `session.interaction` for camera control is not wired yet, so a
+served rollout follows the script it started with.
 
 The tick example remains available for the older one-block-per-`generate()`
 control plane.

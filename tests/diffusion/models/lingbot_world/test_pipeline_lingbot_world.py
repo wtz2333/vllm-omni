@@ -1910,6 +1910,56 @@ def test_stepwise_matches_tick_transformer_trace_and_latents() -> None:
         torch.testing.assert_close(output.output["payload"]["latents"], tick_latent)
 
 
+def test_stepwise_emits_latents_without_touching_the_vae() -> None:
+    """Latent mode must stay latent: streaming decode is opt-in per request."""
+    module = _load_pipeline_module()
+    pipeline = _pipeline(module, transformer=_RecordingTransformer())
+    pipeline._ar_height = 16
+    pipeline._ar_width = 16
+    state = _stepwise_state(num_frames=21)
+    fake = _FakeARState(state.request_id)
+
+    with pipeline.bind_ar_diffusion_state(state.request_id, fake):
+        outputs = _run_stepwise(pipeline, state)
+
+    assert [set(output.output["payload"]) for output in outputs] == [{"latents"}, {"latents"}]
+    assert pipeline.vae.decode_inputs == []
+
+
+def test_stepwise_decodes_each_chunk_for_streaming_consumers(monkeypatch) -> None:
+    """A non-latent request must stream pixels under the primary "video" key."""
+    import diffusers.video_processor as video_processor_module
+
+    module = _load_pipeline_module()
+    processed = []
+
+    class VideoProcessor:
+        def __init__(self, *, vae_scale_factor):
+            assert vae_scale_factor == 8
+
+        def postprocess_video(self, video, *, output_type):
+            processed.append((tuple(video.shape), output_type))
+            return f"frames-{len(processed)}"
+
+    monkeypatch.setattr(video_processor_module, "VideoProcessor", VideoProcessor)
+    pipeline = _pipeline(module, transformer=_RecordingTransformer())
+    pipeline._ar_height = 16
+    pipeline._ar_width = 16
+    state = _stepwise_state(num_frames=21)
+    state.sampling.output_type = "np"
+    fake = _FakeARState(state.request_id)
+
+    with pipeline.bind_ar_diffusion_state(state.request_id, fake):
+        outputs = _run_stepwise(pipeline, state)
+
+    # One decode per AR block, each seeing only that block's three latent frames.
+    assert [tuple(latents.shape) for latents in pipeline.vae.decode_inputs] == [(1, 16, 3, 2, 2)] * 2
+    assert [output_type for _, output_type in processed] == ["np", "np"]
+    assert [output.output["payload"] for output in outputs] == [{"video": "frames-1"}, {"video": "frames-2"}]
+    # Identity metadata survives the switch to pixel output.
+    assert [output.output["metadata"]["ar_diffusion"]["chunk_index"] for output in outputs] == [0, 1]
+
+
 def test_registry_and_model_exports_resolve_official_pipeline_class_name() -> None:
     module = _load_pipeline_module()
     resolved, entry, cache_acceleration_disabled, preprocess_name, preprocess = _resolve_pipeline_through_real_registry(

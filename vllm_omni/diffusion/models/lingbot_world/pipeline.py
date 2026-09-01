@@ -98,9 +98,11 @@ class _LingBotRequestInputs:
 
     prompt: str
     image: PIL.Image.Image | torch.Tensor
-    camera_trajectory: CameraTrajectory | None
-    camera_actions: LingBotCameraActionFrames | None
-    camera_action_script: LingBotCameraActionScript | None
+    # Exactly one of the three is materialized per request.
+    camera_trajectory: CameraTrajectory | None  # offline replay and stepwise
+    # tick path only; superseded by camera_action_script once the tick entry point is deprecated
+    camera_actions: LingBotCameraActionFrames | None  # one chunk per request
+    camera_action_script: LingBotCameraActionScript | None  # stepwise, one action list per chunk
     height: int
     width: int
     num_frames: int
@@ -1407,6 +1409,32 @@ class LingBotWorldCausalDMDPipeline(
             stage_durations=self.stage_durations if hasattr(self, "stage_durations") else None,
         )
 
+    def _decode_chunk_to_pixels(self, latents: torch.Tensor, *, output_type: str) -> Any:
+        """Decode one AR block so streaming consumers receive pixels, not latents.
+
+        Blocks are decoded independently, which keeps the shared VAE stateless
+        and lets a rollout be served without a per-session temporal cache. That
+        is the same shape Helios streams today; cross-block ``feat_cache``
+        continuity is a separate decision and is not made here.
+
+        The envelope this pipeline returns bypasses the registered
+        post-process hook, so the pixel conversion the hook would normally do
+        happens here instead.
+        """
+        latent_mean, latent_std = self._vae_latent_stats(latents)
+        vae_latents = (latents * latent_std + latent_mean).to(dtype=self.vae.dtype)
+        video = self.vae.decode(vae_latents, return_dict=False)[0]
+        return self._video_processor().postprocess_video(video, output_type=output_type)
+
+    def _video_processor(self) -> Any:
+        processor = getattr(self, "_cached_video_processor", None)
+        if processor is None:
+            from diffusers.video_processor import VideoProcessor
+
+            processor = VideoProcessor(vae_scale_factor=self.vae_scale_factor_spatial)
+            self._cached_video_processor = processor
+        return processor
+
     def _horizon_latent_frames(self) -> int:
         return (_MAX_RAW_FRAMES - 1) // self.vae_scale_factor_temporal + 1
 
@@ -1432,8 +1460,6 @@ class LingBotWorldCausalDMDPipeline(
         inputs = self._parse_request(req)
         if ARDiffusionTickRequest.from_extra_args(state.sampling.extra_args) is not None:
             raise ValueError("LingBot step execution does not accept AR-Diffusion ticks.")
-        if inputs.output_type != "latent":
-            raise ValueError("LingBot step execution currently requires output_type='latent'.")
         if (inputs.height, inputs.width) != (self._ar_height, self._ar_width):
             raise ValueError(
                 "LingBot AR-Diffusion request resolution must match the "
@@ -1467,7 +1493,7 @@ class LingBotWorldCausalDMDPipeline(
             ),
             dtype=dtype,
         )
-        latent_camera_trajectory = None
+        camera_trajectory_cache = None
         if inputs.camera_trajectory is not None:
             available_frames = int(inputs.camera_trajectory.poses.shape[0])
             if available_frames < inputs.num_frames:
@@ -1479,7 +1505,7 @@ class LingBotWorldCausalDMDPipeline(
                 poses=inputs.camera_trajectory.poses[: inputs.num_frames],
                 intrinsics=inputs.camera_trajectory.intrinsics[: inputs.num_frames],
             )
-            latent_camera_trajectory = interpolate_camera_trajectory(truncated, inputs.num_latent_frames)
+            camera_trajectory_cache = interpolate_camera_trajectory(truncated, inputs.num_latent_frames)
         state.prompt_embeds = prompt_embeds
         state.chunk_index = 0
         state.step_index = 0
@@ -1495,7 +1521,7 @@ class LingBotWorldCausalDMDPipeline(
             "camera_pitch": 0.0,
             "camera_tail": None,
             "camera_action_script": inputs.camera_action_script,
-            "latent_camera_trajectory": latent_camera_trajectory,
+            "camera_trajectory_cache": camera_trajectory_cache,
         }
         self._ar_text_caches(prompt_embeds, invalidate=False)
         self._prepare_next_chunk(state)
@@ -1534,8 +1560,8 @@ class LingBotWorldCausalDMDPipeline(
                 dtype=extra["dtype"],
                 previous=previous,
             )
-        elif extra.get("latent_camera_trajectory") is not None:
-            trajectory = extra["latent_camera_trajectory"]
+        elif extra.get("camera_trajectory_cache") is not None:
+            trajectory = extra["camera_trajectory_cache"]
             chunk_inputs = replace(
                 inputs,
                 camera_trajectory=CameraTrajectory(
@@ -1662,8 +1688,16 @@ class LingBotWorldCausalDMDPipeline(
             start_frame=int(extra["start_frame"]),
         )
         completed_chunk_index = state.chunk_index
+        inputs: _LingBotRequestInputs = extra["inputs"]
+        # "video" is the payload key the output formatter treats as primary, so
+        # a streaming client receives frames on ``images`` like any other video
+        # pipeline; latent mode keeps the tensor for offline consumers.
+        if inputs.output_type == "latent":
+            payload: dict[str, Any] = {"latents": latents}
+        else:
+            payload = {"video": self._decode_chunk_to_pixels(latents, output_type=inputs.output_type)}
         output = {
-            "payload": {"latents": latents},
+            "payload": payload,
             "metadata": {
                 "ar_diffusion": ARDiffusionChunkMetadata(
                     session_id=state.request_id,
