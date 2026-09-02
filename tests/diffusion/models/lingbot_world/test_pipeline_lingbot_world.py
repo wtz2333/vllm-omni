@@ -1835,6 +1835,30 @@ def test_preprocess_materializes_camera_action_script_without_action_path() -> N
     )
 
 
+@pytest.mark.parametrize(
+    "extra_args",
+    [
+        pytest.param({}, id="request_mode"),
+        pytest.param(_tick_extra_args(chunk_index=0), id="tick_mode"),
+    ],
+)
+def test_forward_rejects_a_stepwise_camera_action_script(extra_args) -> None:
+    """A script only steers step execution, so request mode must not drop it silently."""
+    module = _load_pipeline_module()
+    pipeline = _pipeline(module)
+    sampling = _SamplingParams(
+        include_action=False,
+        extra_args={
+            **extra_args,
+            "_lingbot_camera_trajectory": None,
+            "_lingbot_camera_action_script": _empty_action_script(1),
+        },
+    )
+
+    with pytest.raises(ValueError, match="camera_action_script is read only by LingBot step execution"):
+        pipeline(_request(sampling=sampling))
+
+
 def test_stepwise_progress_metadata_and_commit_trace() -> None:
     module = _load_pipeline_module()
     transformer = _RecordingTransformer()

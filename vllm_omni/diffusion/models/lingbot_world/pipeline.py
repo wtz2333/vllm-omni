@@ -94,15 +94,34 @@ _SOURCE_IMAGE_ERROR = (
 
 @dataclass(frozen=True)
 class _LingBotRequestInputs:
-    """Validated model-specific request boundary."""
+    """Validated model-specific request boundary.
+
+    Pre-processing materializes exactly one of the three camera fields, chosen
+    from the shape of the incoming control. They are not alternative spellings
+    of one input: ``camera_action_script`` is a *container* whose element is a
+    ``camera_actions``, and the two are live at once during step execution.
+
+    - ``camera_trajectory`` is explicit per-frame poses and intrinsics. Offline
+      replay loads it from ``extra_args["action_path"]``; the tick entry point
+      receives the same content as a ``lingbot.camera_trajectory.v1`` control.
+      Integrating WASD actions also produces one, written back onto this field.
+    - ``camera_actions`` is WASD key state for *one* three-latent-frame block:
+      the unit every path reduces to before the camera is embedded. The tick
+      entry point fills it directly, because one of its requests is one block;
+      step execution derives it per block by slicing ``camera_action_script``.
+      ``_prepare_camera`` also reads it as the signal that the trajectory it
+      was handed is already latent-aligned.
+    - ``camera_action_script`` holds one such action list *per generated chunk*
+      for the whole rollout, which only step execution needs, because only it
+      runs every block inside a single ``generate()``. The tick entry point has
+      no use for it and ``forward()`` rejects a request that carries it.
+    """
 
     prompt: str
     image: PIL.Image.Image | torch.Tensor
-    # Exactly one of the three is materialized per request.
-    camera_trajectory: CameraTrajectory | None  # offline replay and stepwise
-    # tick path only; superseded by camera_action_script once the tick entry point is deprecated
-    camera_actions: LingBotCameraActionFrames | None  # one chunk per request
-    camera_action_script: LingBotCameraActionScript | None  # stepwise, one action list per chunk
+    camera_trajectory: CameraTrajectory | None
+    camera_actions: LingBotCameraActionFrames | None
+    camera_action_script: LingBotCameraActionScript | None
     height: int
     width: int
     num_frames: int
@@ -1222,6 +1241,15 @@ class LingBotWorldCausalDMDPipeline(
 
     def forward(self, req: DiffusionRequestBatch) -> DiffusionOutput:
         inputs = self._parse_request(req)
+        if inputs.camera_action_script is not None:
+            # Only step execution walks a whole rollout inside one request, so
+            # a per-chunk script here would be silently dropped rather than
+            # steering the camera.
+            raise ValueError(
+                "camera_action_script is read only by LingBot step execution; "
+                "request mode takes one three-frame camera_actions control per "
+                "block, or a camera_trajectory for the request."
+            )
         tick = ARDiffusionTickRequest.from_extra_args(req.sampling_params.extra_args)
         if tick is not None and self._ar_diffusion_kv_state is None:
             raise RuntimeError("LingBot typed ticks require ARDiffusionEngine session binding.")
@@ -1417,9 +1445,9 @@ class LingBotWorldCausalDMDPipeline(
         is the same shape Helios streams today; cross-block ``feat_cache``
         continuity is a separate decision and is not made here.
 
-        The envelope this pipeline returns bypasses the registered
-        post-process hook, so the pixel conversion the hook would normally do
-        happens here instead.
+        The registered post-process hook returns a ``{"payload", "metadata"}``
+        envelope untouched, so the pixel conversion it would do for a bare
+        tensor has to happen here instead.
         """
         latent_mean, latent_std = self._vae_latent_stats(latents)
         vae_latents = (latents * latent_std + latent_mean).to(dtype=self.vae.dtype)
