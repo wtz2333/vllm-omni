@@ -1,0 +1,21 @@
+# SPDX-License-Identifier: Apache-2.0
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# Opt-in stepwise (streaming) topology for Echo-WM Flash.
+#
+# Usage:
+#   vllm serve <echo-wm-checkpoint> --omni \
+#     --deploy-config vllm_omni/deploy/echo_wm_stepwise.yaml
+#
+# The request supplies the pre-encoded first-frame latent, prompt embeddings
+# (or a Gemma path via model_config), and the UCPE camera arrays through
+# sampling extra_args; see recipes/echo-wm.md.
+
+model_config:
+  echo_wm_height: 704
+  echo_wm_width: 1280
+  # echo_wm_gemma_path: /path/to/gemma-3  # optional in-process text encoder
+
+pipeline: echo_wm
+step_execution: true
+streaming_output: true
+max_num_seqs: 1

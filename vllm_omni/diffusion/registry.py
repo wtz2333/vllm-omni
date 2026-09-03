@@ -146,6 +146,11 @@ _DIFFUSION_MODELS = {
         "pipeline",
         "LingBotWorldCausalDMDPipeline",
     ),
+    "EchoWMCausalPipeline": (
+        "echo_wm",
+        "pipeline",
+        "EchoWMCausalPipeline",
+    ),
     "LongCatImagePipeline": (
         "longcat_image",
         "pipeline_longcat_image",
@@ -368,6 +373,7 @@ _NO_CACHE_ACCELERATION = {
     # instead of erroring.
     "Pi0Pipeline",
     "LingBotWorldCausalDMDPipeline",
+    "EchoWMCausalPipeline",
 }
 
 

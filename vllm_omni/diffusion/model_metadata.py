@@ -100,6 +100,7 @@ _DIFFUSION_MODEL_METADATA_ALIASES = {
     "LTX2TwoStagePipeline": "LTX2Pipeline",
     "LTX2DistilledOneStagePipeline": "LTX2DistilledPipeline",
     "LingBotWorldCausalDMDPipeline": "LingBotVideoPipeline",
+    "EchoWMCausalPipeline": "LingBotVideoPipeline",
 }
 
 

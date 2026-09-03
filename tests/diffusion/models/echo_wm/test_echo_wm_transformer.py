@@ -11,11 +11,10 @@ reference repository is absent (e.g. CI).
 
 from __future__ import annotations
 
+import os
 import sys
 from pathlib import Path
 from types import SimpleNamespace
-
-import os
 
 import pytest
 import torch
@@ -88,6 +87,7 @@ def _force_torch_sdpa():
     )
     with set_current_diffusion_config(od_config):
         yield
+
 
 # ---------------------------------------------------------------------------
 # Layout / schedule contracts (always run).
@@ -251,10 +251,10 @@ def _reference_modules():
 
     from ltx_core.guidance.perturbations import BatchedPerturbationConfig
     from ltx_core.model.transformer.attention import AttentionFunction
+    from ltx_core.model.transformer.modality import Modality
     from ltx_core.model.transformer.model import LTXModel, LTXModelType
     from ltx_core.model.transformer.rope import LTXRopeType
     from ltx_core.model.transformer.transformer import ActionBlockConfig
-    from ltx_core.model.transformer.modality import Modality
 
     return SimpleNamespace(
         BatchedPerturbationConfig=BatchedPerturbationConfig,
@@ -324,10 +324,16 @@ def _copy_reference_weights(reference, model: EchoWMTransformer3DModel) -> None:
         for name, param in model.named_parameters():
             if ".to_qkv." in name:
                 prefix, suffix = name.split(".to_qkv.", 1)
-                param.copy_(torch.cat(
-                    [ref_state[f"{prefix}.to_q.{suffix}"], ref_state[f"{prefix}.to_k.{suffix}"], ref_state[f"{prefix}.to_v.{suffix}"]],
-                    dim=0,
-                ))
+                param.copy_(
+                    torch.cat(
+                        [
+                            ref_state[f"{prefix}.to_q.{suffix}"],
+                            ref_state[f"{prefix}.to_k.{suffix}"],
+                            ref_state[f"{prefix}.to_v.{suffix}"],
+                        ],
+                        dim=0,
+                    )
+                )
                 continue
             ref_name = name.replace(".ucpe.", ".").replace(".norm_q.", ".q_norm.").replace(".norm_k.", ".k_norm.")
             source = ref_state[ref_name]
@@ -611,8 +617,8 @@ def test_tiny_forward_parity_image_sink_and_two_blocks(setup) -> None:
 
 def test_positions_match_reference_patchifier(setup) -> None:
     from ltx_core.components.patchifiers import AudioPatchifier, VideoLatentPatchifier  # noqa: PLC0415
-    from ltx_core.types import AudioLatentShape, VideoLatentShape  # noqa: PLC0415
     from ltx_core.tools import get_pixel_coords  # noqa: PLC0415
+    from ltx_core.types import AudioLatentShape, VideoLatentShape  # noqa: PLC0415
 
     patchifier = VideoLatentPatchifier(1)
     # (batch, channels, frames, height, width): 7 latent frames of a 2x4 grid.
