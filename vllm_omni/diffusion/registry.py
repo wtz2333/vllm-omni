@@ -186,6 +186,11 @@ _DIFFUSION_MODELS = {
         "pipeline",
         "LingBotWorldCausalDMDPipeline",
     ),
+    "EchoWMCausalPipeline": (
+        "echo_wm",
+        "pipeline",
+        "EchoWMCausalPipeline",
+    ),
     "LongCatImagePipeline": (
         "longcat_image",
         "pipeline_longcat_image",
@@ -445,6 +450,7 @@ _NO_CACHE_ACCELERATION = {
     # branch) across denoising steps, which conflicts with cache_dit / tea_cache
     # step-skipping hooks.
     "QwenImage21Pipeline",
+    "EchoWMCausalPipeline",
 }
 
 

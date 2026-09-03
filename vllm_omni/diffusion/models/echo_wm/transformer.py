@@ -32,7 +32,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 from vllm.distributed import get_tensor_model_parallel_rank, get_tensor_model_parallel_world_size
 from vllm.logger import init_logger
-from vllm.model_executor.layers.linear import ColumnParallelLinear, QKVParallelLinear, RowParallelLinear
+from vllm.model_executor.layers.linear import ColumnParallelLinear, RowParallelLinear
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.distributed.comm import SeqAllToAll4D
@@ -51,8 +51,8 @@ from vllm_omni.diffusion.models.ltx2.ltx2_transformer import (
 
 from .causal_cache import (
     EchoWMCacheConfig,
-    EchoWMLayerCaches,
     EchoWMKVWindow,
+    EchoWMLayerCaches,
     EchoWMTextKV,
 )
 from .ucpe import PropeDotProductAttention, active_sink_fifo_indices, prepare_apply_fns, rebase_viewmat_translation
@@ -188,9 +188,7 @@ def _slice_rope_heads(
         return None
     cos, sin = rope
     if cos.ndim != 4 or cos.shape[1] != total_heads:
-        raise ValueError(
-            f"rope template must be (B, {total_heads}, T, D/2), got {tuple(cos.shape)}"
-        )
+        raise ValueError(f"rope template must be (B, {total_heads}, T, D/2), got {tuple(cos.shape)}")
     start, heads = _rank_head_slice(uly, total_heads)
     return cos[:, start : start + heads], sin[:, start : start + heads]
 
@@ -305,8 +303,10 @@ class EchoWMCausalAttnProcessor(LTX2AudioVideoAttnProcessor):
             flat_query = query.flatten(2, 3)
             flat_key = key.flatten(2, 3)
             if windowed:
-                flat_query = apply_split_rotary_emb(flat_query, _slice_rope_rows(local_q_rope, *q_slice), head_dim=head_dim)
-                flat_key = apply_split_rotary_emb(flat_key, _slice_rope_rows(local_k_rope, *k_slice), head_dim=head_dim)
+                q_rows = _slice_rope_rows(local_q_rope, *q_slice)
+                k_rows = _slice_rope_rows(local_k_rope, *k_slice)
+                flat_query = apply_split_rotary_emb(flat_query, q_rows, head_dim=head_dim)
+                flat_key = apply_split_rotary_emb(flat_key, k_rows, head_dim=head_dim)
             else:
                 flat_query = apply_split_rotary_emb(flat_query, local_q_rope, head_dim=head_dim)
                 flat_key = apply_split_rotary_emb(flat_key, local_k_rope, head_dim=head_dim)
@@ -370,20 +370,40 @@ class EchoWMUCPEBranch(nn.Module):
         if config.attn_dim % config.num_heads != 0 or self.head_dim % 4 != 0:
             raise ValueError("UCPE attention dimension must be divisible by heads and by 4")
         self.ucpe_q_proj = ColumnParallelLinear(
-            video_dim, config.attn_dim, bias=False, gather_output=False, return_bias=False,
-            quant_config=quant_config, prefix=f"{prefix}.ucpe_q_proj" if prefix else "ucpe_q_proj",
+            video_dim,
+            config.attn_dim,
+            bias=False,
+            gather_output=False,
+            return_bias=False,
+            quant_config=quant_config,
+            prefix=f"{prefix}.ucpe_q_proj" if prefix else "ucpe_q_proj",
         )
         self.ucpe_k_proj = ColumnParallelLinear(
-            video_dim, config.attn_dim, bias=False, gather_output=False, return_bias=False,
-            quant_config=quant_config, prefix=f"{prefix}.ucpe_k_proj" if prefix else "ucpe_k_proj",
+            video_dim,
+            config.attn_dim,
+            bias=False,
+            gather_output=False,
+            return_bias=False,
+            quant_config=quant_config,
+            prefix=f"{prefix}.ucpe_k_proj" if prefix else "ucpe_k_proj",
         )
         self.ucpe_v_proj = ColumnParallelLinear(
-            video_dim, config.attn_dim, bias=False, gather_output=False, return_bias=False,
-            quant_config=quant_config, prefix=f"{prefix}.ucpe_v_proj" if prefix else "ucpe_v_proj",
+            video_dim,
+            config.attn_dim,
+            bias=False,
+            gather_output=False,
+            return_bias=False,
+            quant_config=quant_config,
+            prefix=f"{prefix}.ucpe_v_proj" if prefix else "ucpe_v_proj",
         )
         self.ucpe_out_proj = RowParallelLinear(
-            config.attn_dim, video_dim, bias=True, input_is_parallel=True, return_bias=False,
-            quant_config=quant_config, prefix=f"{prefix}.ucpe_out_proj" if prefix else "ucpe_out_proj",
+            config.attn_dim,
+            video_dim,
+            bias=True,
+            input_is_parallel=True,
+            return_bias=False,
+            quant_config=quant_config,
+            prefix=f"{prefix}.ucpe_out_proj" if prefix else "ucpe_out_proj",
         )
         self.ucpe_prope = PropeDotProductAttention(
             head_dim=self.head_dim,
@@ -405,13 +425,13 @@ class EchoWMUCPEBranch(nn.Module):
         self,
         norm_vx: torch.Tensor,
         viewmats: torch.Tensor,
-        Ks: torch.Tensor,
+        Ks: torch.Tensor,  # noqa: N803
         *,
         kv_cache: EchoWMKVWindow | None,
         kv_cache_start: int,
         patches_per_frame: int,
         full_viewmats: torch.Tensor | None = None,
-        full_Ks: torch.Tensor | None = None,
+        full_Ks: torch.Tensor | None = None,  # noqa: N803
         global_query_len: int | None = None,
     ) -> torch.Tensor:
         uly = _ulysses()
@@ -452,19 +472,23 @@ class EchoWMUCPEBranch(nn.Module):
             patches_y=self.ucpe_prope.patches_y,
             image_width=self.ucpe_prope.image_width,
             image_height=self.ucpe_prope.image_height,
-            coeffs_x=None if self.ucpe_prope.coeffs_x_0 is None else (
-                self.ucpe_prope.coeffs_x_0, self.ucpe_prope.coeffs_x_1,
+            coeffs_x=None
+            if self.ucpe_prope.coeffs_x_0 is None
+            else (
+                self.ucpe_prope.coeffs_x_0,
+                self.ucpe_prope.coeffs_x_1,
             ),
-            coeffs_y=None if self.ucpe_prope.coeffs_y_0 is None else (
-                self.ucpe_prope.coeffs_y_0, self.ucpe_prope.coeffs_y_1,
+            coeffs_y=None
+            if self.ucpe_prope.coeffs_y_0 is None
+            else (
+                self.ucpe_prope.coeffs_y_0,
+                self.ucpe_prope.coeffs_y_1,
             ),
         )
         apply_q, _, apply_out = prepare_apply_fns(
             viewmats=q_viewmats, Ks=full_Ks[:, current_start:current_end].float(), **kwargs
         )
-        _, apply_kv, _ = prepare_apply_fns(
-            viewmats=k_viewmats, Ks=full_Ks.index_select(1, indices).float(), **kwargs
-        )
+        _, apply_kv, _ = prepare_apply_fns(viewmats=k_viewmats, Ks=full_Ks.index_select(1, indices).float(), **kwargs)
         q = self.ucpe_prope.transform(apply_q, q)
         k = self.ucpe_prope.transform(apply_kv, k)
         v = self.ucpe_prope.transform(apply_kv, v)
@@ -526,28 +550,48 @@ class EchoWMTransformerBlock(nn.Module):
         # "rms_norm_across_heads" implementation in the shared LTX-2 attention.
         qk_norm = "rms_norm_across_heads"
         self.attn1 = LTX2Attention(
-            query_dim=video_dim, heads=video_heads, kv_heads=video_heads, dim_head=video_head_dim,
-            cross_attention_dim=None, qk_norm=qk_norm,
-            prefix=f"{prefix}.attn1" if prefix else "attn1", **shared,
+            query_dim=video_dim,
+            heads=video_heads,
+            kv_heads=video_heads,
+            dim_head=video_head_dim,
+            cross_attention_dim=None,
+            qk_norm=qk_norm,
+            prefix=f"{prefix}.attn1" if prefix else "attn1",
+            **shared,
         )
         self.attn2 = LTX2Attention(
-            query_dim=video_dim, heads=video_heads, kv_heads=video_heads, dim_head=video_head_dim,
-            cross_attention_dim=cross_attention_dim, qk_norm=qk_norm,
-            prefix=f"{prefix}.attn2" if prefix else "attn2", **shared,
+            query_dim=video_dim,
+            heads=video_heads,
+            kv_heads=video_heads,
+            dim_head=video_head_dim,
+            cross_attention_dim=cross_attention_dim,
+            qk_norm=qk_norm,
+            prefix=f"{prefix}.attn2" if prefix else "attn2",
+            **shared,
         )
         self.ff = LTX2FeedForward(video_dim, quant_config=quant_config, prefix=f"{prefix}.ff" if prefix else "ff")
         sst = 6 + (3 if cross_attention_adaln else 0)
         self.scale_shift_table = nn.Parameter(torch.empty(sst, video_dim))
 
         self.audio_attn1 = LTX2Attention(
-            query_dim=audio_dim, heads=audio_heads, kv_heads=audio_heads, dim_head=audio_head_dim,
-            cross_attention_dim=None, qk_norm=qk_norm,
-            prefix=f"{prefix}.audio_attn1" if prefix else "audio_attn1", **shared,
+            query_dim=audio_dim,
+            heads=audio_heads,
+            kv_heads=audio_heads,
+            dim_head=audio_head_dim,
+            cross_attention_dim=None,
+            qk_norm=qk_norm,
+            prefix=f"{prefix}.audio_attn1" if prefix else "audio_attn1",
+            **shared,
         )
         self.audio_attn2 = LTX2Attention(
-            query_dim=audio_dim, heads=audio_heads, kv_heads=audio_heads, dim_head=audio_head_dim,
-            cross_attention_dim=audio_cross_attention_dim, qk_norm=qk_norm,
-            prefix=f"{prefix}.audio_attn2" if prefix else "audio_attn2", **shared,
+            query_dim=audio_dim,
+            heads=audio_heads,
+            kv_heads=audio_heads,
+            dim_head=audio_head_dim,
+            cross_attention_dim=audio_cross_attention_dim,
+            qk_norm=qk_norm,
+            prefix=f"{prefix}.audio_attn2" if prefix else "audio_attn2",
+            **shared,
         )
         self.audio_ff = LTX2FeedForward(
             audio_dim, quant_config=quant_config, prefix=f"{prefix}.audio_ff" if prefix else "audio_ff"
@@ -557,14 +601,24 @@ class EchoWMTransformerBlock(nn.Module):
         # a2v: Q video, K/V audio; v2a mirrored. Both use the audio head
         # geometry (heads x head_dim = 2048).
         self.audio_to_video_attn = LTX2Attention(
-            query_dim=video_dim, heads=audio_heads, kv_heads=audio_heads, dim_head=audio_head_dim,
-            cross_attention_dim=audio_dim, qk_norm=qk_norm,
-            prefix=f"{prefix}.audio_to_video_attn" if prefix else "audio_to_video_attn", **shared,
+            query_dim=video_dim,
+            heads=audio_heads,
+            kv_heads=audio_heads,
+            dim_head=audio_head_dim,
+            cross_attention_dim=audio_dim,
+            qk_norm=qk_norm,
+            prefix=f"{prefix}.audio_to_video_attn" if prefix else "audio_to_video_attn",
+            **shared,
         )
         self.video_to_audio_attn = LTX2Attention(
-            query_dim=audio_dim, heads=audio_heads, kv_heads=audio_heads, dim_head=audio_head_dim,
-            cross_attention_dim=video_dim, qk_norm=qk_norm,
-            prefix=f"{prefix}.video_to_audio_attn" if prefix else "video_to_audio_attn", **shared,
+            query_dim=audio_dim,
+            heads=audio_heads,
+            kv_heads=audio_heads,
+            dim_head=audio_head_dim,
+            cross_attention_dim=video_dim,
+            qk_norm=qk_norm,
+            prefix=f"{prefix}.video_to_audio_attn" if prefix else "video_to_audio_attn",
+            **shared,
         )
         self.scale_shift_table_a2v_ca_video = nn.Parameter(torch.empty(5, video_dim))
         self.scale_shift_table_a2v_ca_audio = nn.Parameter(torch.empty(5, audio_dim))
@@ -577,14 +631,20 @@ class EchoWMTransformerBlock(nn.Module):
         # windowed-cache and rope-template arguments the base processor would
         # silently drop.
         for attention in (
-            self.attn1, self.attn2, self.audio_attn1, self.audio_attn2,
-            self.audio_to_video_attn, self.video_to_audio_attn,
+            self.attn1,
+            self.attn2,
+            self.audio_attn1,
+            self.audio_attn2,
+            self.audio_to_video_attn,
+            self.video_to_audio_attn,
         ):
             attention.set_processor(EchoWMCausalAttnProcessor())
 
         self.ucpe = (
             EchoWMUCPEBranch(
-                video_dim, ucpe, quant_config=quant_config,
+                video_dim,
+                ucpe,
+                quant_config=quant_config,
                 prefix=f"{prefix}" if prefix else "",
             )
             if ucpe is not None
@@ -623,11 +683,14 @@ class EchoWMTransformerBlock(nn.Module):
             ).unbind(dim=2)
             attn_input = rms_norm(x, self.norm_eps) * (1 + scale_q) + shift_q
             encoder_hidden_states = context * (1 + scale_kv) + shift_kv
-            return attn(
-                attn_input,
-                encoder_hidden_states=encoder_hidden_states,
-                crossattn_cache=crossattn_cache,
-            ) * gate
+            return (
+                attn(
+                    attn_input,
+                    encoder_hidden_states=encoder_hidden_states,
+                    crossattn_cache=crossattn_cache,
+                )
+                * gate
+            )
         return attn(rms_norm(x, self.norm_eps), encoder_hidden_states=context, crossattn_cache=crossattn_cache)
 
     def forward(  # noqa: PLR0912, PLR0913, PLR0915
@@ -649,18 +712,22 @@ class EchoWMTransformerBlock(nn.Module):
         audio_cross_scale_shift_timestep: torch.Tensor | None = None,
         audio_cross_gate_timestep: torch.Tensor | None = None,
         ucpe_viewmats: torch.Tensor | None = None,
-        ucpe_Ks: torch.Tensor | None = None,
+        ucpe_Ks: torch.Tensor | None = None,  # noqa: N803
         patches_per_frame: int = 1,
         video_global_len: int | None = None,
         audio_global_len: int | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor | None]:
         if ax is not None and (audio_context is None or audio_timestep is None):
             raise ValueError("audio forwards require audio context and timesteps")
-        if self.cross_attention_adaln and ax is not None and (
-            cross_scale_shift_timestep is None
-            or cross_gate_timestep is None
-            or audio_cross_scale_shift_timestep is None
-            or audio_cross_gate_timestep is None
+        if (
+            self.cross_attention_adaln
+            and ax is not None
+            and (
+                cross_scale_shift_timestep is None
+                or cross_gate_timestep is None
+                or audio_cross_scale_shift_timestep is None
+                or audio_cross_gate_timestep is None
+            )
         ):
             raise ValueError("cross-attention AdaLN requires the AV-CA timesteps")
 
@@ -693,31 +760,45 @@ class EchoWMTransformerBlock(nn.Module):
 
         # 2. video text cross-attention (AdaLN-modulated)
         vx = vx + self._text_cross_attention(
-            vx, video_context, self.attn2, self.scale_shift_table,
+            vx,
+            video_context,
+            self.attn2,
+            self.scale_shift_table,
             getattr(self, "prompt_scale_shift_table", None),
-            video_timestep, prompt_timestep, caches.video_text,
+            video_timestep,
+            prompt_timestep,
+            caches.video_text,
         )
 
         if ax is not None:
             # 3. audio self-attention
             ashift, ascale, agate = self._ada(self.audio_scale_shift_table, audio_timestep)[0:3]
             norm_ax = rms_norm(ax, self.norm_eps) * (1 + ascale) + ashift
-            ax = ax + self.audio_attn1(
-                norm_ax,
-                encoder_hidden_states=None,
-                kv_cache=caches.audio_self,
-                kv_cache_start=audio_token_start,
-                q_rope=caches.audio_rope,
-                k_rope=caches.audio_rope,
-                global_query_len=audio_global_len,
-            ) * agate
+            ax = (
+                ax
+                + self.audio_attn1(
+                    norm_ax,
+                    encoder_hidden_states=None,
+                    kv_cache=caches.audio_self,
+                    kv_cache_start=audio_token_start,
+                    q_rope=caches.audio_rope,
+                    k_rope=caches.audio_rope,
+                    global_query_len=audio_global_len,
+                )
+                * agate
+            )
             del ashift, ascale, agate, norm_ax
 
             # 4. audio text cross-attention
             ax = ax + self._text_cross_attention(
-                ax, audio_context, self.audio_attn2, self.audio_scale_shift_table,
+                ax,
+                audio_context,
+                self.audio_attn2,
+                self.audio_scale_shift_table,
                 getattr(self, "audio_prompt_scale_shift_table", None),
-                audio_timestep, audio_prompt_timestep, caches.audio_text,
+                audio_timestep,
+                audio_prompt_timestep,
+                caches.audio_text,
             )
 
             # 5. audio-video cross-attention
@@ -739,16 +820,20 @@ class EchoWMTransformerBlock(nn.Module):
             q_slice = caches.a2v_q_slices.get((audio_token_start, audio_token_start + ax.shape[1]))
             if q_slice is None:
                 raise ValueError(f"missing a2v query RoPE slice at audio start {audio_token_start}")
-            vx = vx + self.audio_to_video_attn(
-                vx_scaled,
-                encoder_hidden_states=ax_scaled,
-                kv_cache=caches.a2v,
-                kv_cache_start=audio_token_start,
-                q_rope=caches.video_cross_rope,
-                k_rope=caches.audio_cross_rope,
-                q_rope_slice=q_slice,
-                global_query_len=video_global_len,
-            ) * gate_out_a2v
+            vx = (
+                vx
+                + self.audio_to_video_attn(
+                    vx_scaled,
+                    encoder_hidden_states=ax_scaled,
+                    kv_cache=caches.a2v,
+                    kv_cache_start=audio_token_start,
+                    q_rope=caches.video_cross_rope,
+                    k_rope=caches.audio_cross_rope,
+                    q_rope_slice=q_slice,
+                    global_query_len=video_global_len,
+                )
+                * gate_out_a2v
+            )
             del gate_out_a2v, vx_scaled, ax_scaled
 
             # v2a: Q audio (audio table rows 2:4), K/V video (video rows 2:4).
@@ -765,16 +850,20 @@ class EchoWMTransformerBlock(nn.Module):
             q_slice = caches.v2a_q_slices.get((video_token_start, video_token_start + vx_norm3.shape[1]))
             if q_slice is None:
                 raise ValueError(f"missing v2a query RoPE slice at video start {video_token_start}")
-            ax = ax + self.video_to_audio_attn(
-                ax_scaled,
-                encoder_hidden_states=vx_scaled,
-                kv_cache=caches.v2a,
-                kv_cache_start=video_token_start,
-                q_rope=caches.audio_cross_rope,
-                k_rope=caches.video_cross_rope,
-                q_rope_slice=q_slice,
-                global_query_len=audio_global_len,
-            ) * gate_out_v2a
+            ax = (
+                ax
+                + self.video_to_audio_attn(
+                    ax_scaled,
+                    encoder_hidden_states=vx_scaled,
+                    kv_cache=caches.v2a,
+                    kv_cache_start=video_token_start,
+                    q_rope=caches.audio_cross_rope,
+                    k_rope=caches.video_cross_rope,
+                    q_rope_slice=q_slice,
+                    global_query_len=audio_global_len,
+                )
+                * gate_out_v2a
+            )
             del gate_out_v2a, ax_scaled, vx_scaled, vx_norm3, ax_norm3
 
         # 6. feed-forwards
@@ -876,9 +965,7 @@ class EchoWMTransformer3DModel(nn.Module):
             )
         sp_size = _ulysses().world_size
         if (num_attention_heads // tp_size) % sp_size or (audio_num_attention_heads // tp_size) % sp_size:
-            raise ValueError(
-                f"TP-local heads must be divisible by sequence parallel size {sp_size}"
-            )
+            raise ValueError(f"TP-local heads must be divisible by sequence parallel size {sp_size}")
         if ucpe is not None and ucpe.num_heads % (tp_size * sp_size):
             raise ValueError(f"UCPE heads ({ucpe.num_heads}) must be divisible by tp*sp = {tp_size * sp_size}")
 
@@ -920,9 +1007,7 @@ class EchoWMTransformer3DModel(nn.Module):
         self.audio_patchify_proj = nn.Linear(audio_in_channels, self.audio_inner_dim, bias=True)
         self.audio_adaln_single = LTX2AdaLayerNormSingle(self.audio_inner_dim, num_mod_params=9)
         self.audio_prompt_adaln_single = (
-            LTX2AdaLayerNormSingle(self.audio_inner_dim, num_mod_params=2)
-            if cross_attention_adaln
-            else None
+            LTX2AdaLayerNormSingle(self.audio_inner_dim, num_mod_params=2) if cross_attention_adaln else None
         )
         self.audio_scale_shift_table = nn.Parameter(torch.empty(2, self.audio_inner_dim))
         self.audio_norm_out = nn.LayerNorm(self.audio_inner_dim, elementwise_affine=False, eps=norm_eps)
@@ -1001,9 +1086,7 @@ class EchoWMTransformer3DModel(nn.Module):
         # tiny model construct the class directly.
         for key, expected in _ECHOWM_CHECKPOINT_CONTRACT.items():
             if kwargs[key] != expected:
-                raise ValueError(
-                    f"Echo-WM Flash checkpoint contract: {key} must be {expected!r}, got {kwargs[key]!r}"
-                )
+                raise ValueError(f"Echo-WM Flash checkpoint contract: {key} must be {expected!r}, got {kwargs[key]!r}")
         kwargs.update(ucpe=ucpe, quant_config=quant_config, prefix=prefix)
         return cls(**kwargs)
 
@@ -1045,7 +1128,9 @@ class EchoWMTransformer3DModel(nn.Module):
                 video_text=EchoWMTextKV(
                     batch_size, text_seq_len, video_heads, self.config.attention_head_dim, device, dtype
                 ),
-                audio_self=window(audio_heads, self.config.audio_attention_head_dim, audio_window, audio_window, audio_sink),
+                audio_self=window(
+                    audio_heads, self.config.audio_attention_head_dim, audio_window, audio_window, audio_sink
+                ),
                 audio_text=EchoWMTextKV(
                     batch_size, text_seq_len, audio_heads, self.config.audio_attention_head_dim, device, dtype
                 ),
@@ -1085,7 +1170,7 @@ class EchoWMTransformer3DModel(nn.Module):
         video_token_start: int = 0,
         audio_token_start: int = 0,
         ucpe_viewmats: torch.Tensor | None = None,
-        ucpe_Ks: torch.Tensor | None = None,
+        ucpe_Ks: torch.Tensor | None = None,  # noqa: N803
         patches_per_frame: int = 1,
         video_global_len: int | None = None,
         audio_global_len: int | None = None,
@@ -1125,16 +1210,18 @@ class EchoWMTransformer3DModel(nn.Module):
         audio_prompt_timestep = None
         if self.prompt_adaln_single is not None:
             prompt_timestep = self._prepare_timesteps(1.0, self.prompt_adaln_single, 1, dtype, device)[0]
-            audio_prompt_timestep = self._prepare_timesteps(
-                1.0, self.audio_prompt_adaln_single, 1, dtype, device
-            )[0]
+            audio_prompt_timestep = self._prepare_timesteps(1.0, self.audio_prompt_adaln_single, 1, dtype, device)[0]
         # AV cross-attention AdaLN at the constant cross sigma = 1.
         cross_step = torch.full((1,), float(self.timestep_scale_multiplier), device=device, dtype=torch.float32)
         av_factor = self.config.av_ca_timestep_scale_multiplier / self.timestep_scale_multiplier
         cross_scale_shift = self.av_ca_video_scale_shift_adaln_single(cross_step, hidden_dtype=dtype)[0].view(1, 1, -1)
         cross_gate = self.av_ca_a2v_gate_adaln_single(cross_step * av_factor, hidden_dtype=dtype)[0].view(1, 1, -1)
-        audio_cross_scale_shift = self.av_ca_audio_scale_shift_adaln_single(cross_step, hidden_dtype=dtype)[0].view(1, 1, -1)
-        audio_cross_gate = self.av_ca_v2a_gate_adaln_single(cross_step * av_factor, hidden_dtype=dtype)[0].view(1, 1, -1)
+        audio_cross_scale_shift = self.av_ca_audio_scale_shift_adaln_single(cross_step, hidden_dtype=dtype)[0].view(
+            1, 1, -1
+        )
+        audio_cross_gate = self.av_ca_v2a_gate_adaln_single(cross_step * av_factor, hidden_dtype=dtype)[0].view(
+            1, 1, -1
+        )
 
         if video_global_len is None:
             video_global_len = vx.shape[1]

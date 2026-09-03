@@ -14,8 +14,8 @@ intrinsics (``Ks``), plus 2-D split-style RoPE over the latent patch grid.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from functools import partial
-from typing import Callable
 
 import torch
 import torch.nn.functional as F
@@ -127,7 +127,7 @@ class PropeDotProductAttention(torch.nn.Module):
     def precompute_and_cache_apply_fns(
         self,
         viewmats: torch.Tensor,
-        Ks: torch.Tensor | None,
+        Ks: torch.Tensor | None,  # noqa: N803  # noqa: N803
         coeffs_x: tuple[torch.Tensor, torch.Tensor] | None = None,
         coeffs_y: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> None:
@@ -169,14 +169,18 @@ class PropeDotProductAttention(torch.nn.Module):
 def prepare_apply_fns(
     head_dim: int,
     viewmats: torch.Tensor,
-    Ks: torch.Tensor | None,
+    Ks: torch.Tensor | None,  # noqa: N803
     patches_x: int,
     patches_y: int,
     image_width: int,
     image_height: int,
     coeffs_x: tuple[torch.Tensor, torch.Tensor] | None = None,
     coeffs_y: tuple[torch.Tensor, torch.Tensor] | None = None,
-) -> tuple[Callable[[torch.Tensor], torch.Tensor], Callable[[torch.Tensor], torch.Tensor], Callable[[torch.Tensor], torch.Tensor]]:
+) -> tuple[
+    Callable[[torch.Tensor], torch.Tensor],
+    Callable[[torch.Tensor], torch.Tensor],
+    Callable[[torch.Tensor], torch.Tensor],
+]:
     """Prepare transforms for PRoPE-style positional encoding."""
     device = viewmats.device
     batch, cameras, _, _ = viewmats.shape
@@ -369,7 +373,7 @@ def ucpe_attention(
     v: torch.Tensor,
     *,
     viewmats: torch.Tensor,
-    Ks: torch.Tensor | None,
+    Ks: torch.Tensor | None,  # noqa: N803
     patches_x: int,
     patches_y: int,
     image_width: int,

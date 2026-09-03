@@ -79,6 +79,7 @@ from vllm_omni.model_executor.models.joyai_vl_interaction.pipeline import (
 )
 from vllm_omni.model_executor.models.lance.pipeline import LANCE_PIPELINE
 from vllm_omni.model_executor.models.lingbot_world.pipeline import LINGBOT_WORLD_PIPELINE
+from vllm_omni.model_executor.models.echo_wm.pipeline import ECHO_WM_PIPELINE
 from vllm_omni.model_executor.models.mammoth_moda2.pipeline import (
     MAMMOTH_MODA2_AR_PIPELINE,
     MAMMOTH_MODA2_PIPELINE,
@@ -154,6 +155,7 @@ OMNI_PIPELINES: dict[str, PipelineConfig | PipelineResolverFunc] = {
     "covo_audio": COVO_AUDIO_PIPELINE,
     "dreamzero": DREAMZERO_PIPELINE,
     "fish_qwen3_omni": FISH_SPEECH_PIPELINE,
+    "echo_wm": ECHO_WM_PIPELINE,
     "gepard": GEPARD_PIPELINE,
     "glm_image": GLM_IMAGE_PIPELINE,
     "glm_tts": GLM_TTS_PIPELINE,

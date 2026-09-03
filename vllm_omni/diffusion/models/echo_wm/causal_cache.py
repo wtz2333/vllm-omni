@@ -283,7 +283,7 @@ class EchoWMLayerCaches:
     v2a_q_slices: dict[tuple[int, int], tuple[int, int]] = field(default_factory=dict)
     # Bounded-anchor-translation state for the UCPE branch.
     ucpe_full_viewmats: torch.Tensor | None = None
-    ucpe_full_Ks: torch.Tensor | None = None
+    ucpe_full_Ks: torch.Tensor | None = None  # noqa: N815
     ucpe_bounded: bool = False
 
 
