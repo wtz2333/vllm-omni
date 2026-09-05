@@ -1,14 +1,6 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
-"""Echo-WM single-stage diffusion topology.
-
-Serving resolves a deploy config through this registration, so the stepwise
-stage cannot be launched with ``--deploy-config`` until the pipeline name is
-registered here. Like LingBot-World, there is deliberately no
-``default_deploy_config_name``: Echo-WM checkpoints are matched by name and
-stepwise serving stays opt-in through
-``--deploy-config vllm_omni/deploy/echo_wm_stepwise.yaml``.
-"""
+"""Echo-WM request execution by default; chunk streaming is opt-in."""
 
 from vllm_omni.config.stage_config import (
     PipelineConfig,
@@ -19,6 +11,7 @@ from vllm_omni.config.stage_config import (
 ECHO_WM_PIPELINE = PipelineConfig(
     model_type="echo_wm",
     model_arch="EchoWMCausalPipeline",
+    default_deploy_config_name="echo_wm.yaml",
     stages=(
         StagePipelineConfig(
             stage_id=0,

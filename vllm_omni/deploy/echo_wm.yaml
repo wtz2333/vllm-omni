@@ -1,26 +1,24 @@
 # SPDX-License-Identifier: Apache-2.0
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
-# vllm serve <echo-wm-checkpoint> --omni \
-#   --deploy-config vllm_omni/deploy/echo_wm_stepwise.yaml
-
+# Default full-request Echo-WM Flash execution. Use echo_wm_stepwise.yaml
+# explicitly for chunk streaming.
 pipeline: echo_wm
 async_chunk: false
 dtype: bfloat16
 
 stages:
   - stage_id: 0
-    devices: "0"
     model_class_name: EchoWMCausalPipeline
     max_num_seqs: 1
     enforce_eager: true
     diffusion_attention_config:
       default: TORCH_SDPA
-    step_execution: true
-    streaming_output: true
+    step_execution: false
+    streaming_output: false
     default_sampling_params:
       num_inference_steps: 4
-      num_frames: 241
-      output_type: pil
+      num_frames: 169
+      output_type: pt
     model_config:
       echo_wm_height: 704
       echo_wm_width: 1280

@@ -19,6 +19,8 @@ def get_diffusion_model_index(
     revision: str | None = None,
 ) -> dict | None:
     """Read the first standard Diffusers pipeline index available."""
+    if os.path.isfile(model_name):
+        return None  # Native checkpoint files do not have a repository index.
     for filename in DIFFUSION_MODEL_INDEX_FILES:
         config = get_hf_file_to_dict(filename, model_name, revision=revision)
         if isinstance(config, Mapping):

@@ -633,7 +633,8 @@ def resolve_model_class_name(
 
     from vllm_omni.diffusion.utils.hf_utils import get_diffusion_model_index
 
-    if not model:
+    if not model or os.path.isfile(model):
+        # Native files need an explicit architecture; they are not HF repos.
         return None
     is_lance_subfolder = os.path.basename(str(model).rstrip("/")) in {"Lance_3B", "Lance_3B_Video"}
 
@@ -1335,6 +1336,20 @@ class OmniDiffusionConfig:
         from vllm_omni.diffusion.utils.hf_utils import get_diffusion_model_index
 
         assert self.model is not None
+        if os.path.isfile(self.model):
+            metadata = get_diffusion_model_metadata(self.model_class_name)
+            if not metadata.supports_single_file_checkpoint or self.diffusion_load_format == "diffusers":
+                raise ValueError(
+                    "Local checkpoint files require an explicit model_class_name that supports "
+                    "native single-file loading with the default diffusion backend; "
+                    f"got model_class_name={self.model_class_name!r}, "
+                    f"diffusion_load_format={self.diffusion_load_format!r}"
+                )
+            # The registered native pipeline reads its checkpoint's own
+            # metadata. Generic HF config/index probing cannot interpret a file.
+            self.set_tf_model_config(TransformerConfig())
+            self.update_multimodal_support()
+            return
         try:
             config_dict = get_diffusion_model_index(
                 self.model,

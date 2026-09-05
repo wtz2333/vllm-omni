@@ -21,7 +21,7 @@ from vllm_omni.config.config_factory import (
     with_trust_remote_code_override,
 )
 from vllm_omni.config.pipeline_registry import OMNI_PIPELINES
-from vllm_omni.config.stage_config import _DEPLOY_DIR
+from vllm_omni.config.stage_config import _DEPLOY_DIR, PipelineConfig, StageExecutionType
 from vllm_omni.config.yaml_util import create_config, load_yaml_config
 from vllm_omni.diffusion.utils.hf_utils import (
     _looks_like_dreamzero,
@@ -257,6 +257,25 @@ def _registry_default_deploy_path(model: str) -> str | None:
     default_deploy_path = _DEPLOY_DIR / pipeline_config.default_deploy_config_name
     if default_deploy_path.is_file():
         return str(default_deploy_path)
+    return None
+
+
+def _explicit_diffusion_deploy_path(model_class_name: str | None) -> str | None:
+    """Resolve a declared native diffusion architecture before HF path probing."""
+    if model_class_name is None:
+        return None
+    for pipeline in OMNI_PIPELINES.values():
+        if not isinstance(pipeline, PipelineConfig):
+            continue
+        if (
+            pipeline.model_arch == model_class_name
+            and len(pipeline.stages) == 1
+            and pipeline.stages[0].execution_type == StageExecutionType.DIFFUSION
+            and pipeline.default_deploy_config_name is not None
+        ):
+            path = _DEPLOY_DIR / pipeline.default_deploy_config_name
+            if path.is_file():
+                return str(path)
     return None
 
 
@@ -586,6 +605,11 @@ def load_and_resolve_stage_configs(
         the strategy-derived pipeline-wide load-balancer policy (``None`` when no
         strategy set one), returned for the engine to apply.
     """
+    if deploy_config_path is None and os.path.isfile(model):
+        # Native single-file checkpoints have no HF config/model_index. An
+        # explicitly registered diffusion class already identifies their
+        # pipeline; use its deploy config for both discovery and stage merge.
+        deploy_config_path = _explicit_diffusion_deploy_path((kwargs or {}).get("model_class_name"))
     config_path = deploy_config_path if deploy_config_path is not None else resolve_model_config_path(model)
     stage_configs, omni_lb_policy = load_stage_configs_from_model(
         model,

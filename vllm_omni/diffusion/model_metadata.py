@@ -13,6 +13,8 @@ class DiffusionModelMetadata:
     supports_mixed_reference_inputs: bool = False
     attention_mask_free: bool = False
     final_output_type: str | None = None
+    # The pipeline owns embedded metadata and weight loading for native files.
+    supports_single_file_checkpoint: bool = False
 
 
 QWEN_IMAGE_EDIT_PLUS_MAX_INPUT_IMAGES = 4
@@ -82,6 +84,12 @@ _DIFFUSION_MODEL_METADATA: dict[str, DiffusionModelMetadata] = {
     "HunyuanVideo15Pipeline": DiffusionModelMetadata(final_output_type="video"),
     "HunyuanVideo15ImageToVideoPipeline": DiffusionModelMetadata(final_output_type="video"),
     "LingBotVideoPipeline": DiffusionModelMetadata(final_output_type="video"),
+    "EchoWMCausalPipeline": DiffusionModelMetadata(
+        supports_single_file_checkpoint=True,
+        supports_multimodal_inputs=True,
+        max_multimodal_image_inputs=1,
+        final_output_type="video",
+    ),
     "LongCatVideoAvatarPipeline": DiffusionModelMetadata(final_output_type="video"),
     "MagiHumanPipeline": DiffusionModelMetadata(final_output_type="video"),
     "DreamIDOmniPipeline": DiffusionModelMetadata(final_output_type="video"),
@@ -100,7 +108,6 @@ _DIFFUSION_MODEL_METADATA_ALIASES = {
     "LTX2TwoStagePipeline": "LTX2Pipeline",
     "LTX2DistilledOneStagePipeline": "LTX2DistilledPipeline",
     "LingBotWorldCausalDMDPipeline": "LingBotVideoPipeline",
-    "EchoWMCausalPipeline": "LingBotVideoPipeline",
 }
 
 

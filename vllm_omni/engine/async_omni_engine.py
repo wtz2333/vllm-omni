@@ -14,6 +14,7 @@ import asyncio
 import concurrent.futures
 import copy
 import json
+import os
 import queue
 import shutil
 import threading
@@ -300,7 +301,16 @@ class AsyncOmniEngine:
             from vllm_omni.diffusion.data import resolve_model_class_name
             from vllm_omni.diffusion.model_metadata import get_diffusion_model_metadata
 
-            model_class_name = resolve_model_class_name(self.model)
+            model_class_name = None
+            if os.path.isfile(self.model):
+                # Native files cannot infer a class through HF metadata. Reuse
+                # the explicit architecture already resolved for their worker.
+                for stage in self.stage_configs:
+                    if getattr(stage, "stage_type", None) == "diffusion":
+                        model_class_name = getattr(stage.engine_args, "model_class_name", None)
+                        break
+            if model_class_name is None:
+                model_class_name = resolve_model_class_name(self.model)
             metadata = get_diffusion_model_metadata(model_class_name)
             self._diffusion_od_config_view = SimpleNamespace(
                 model_class_name=model_class_name,

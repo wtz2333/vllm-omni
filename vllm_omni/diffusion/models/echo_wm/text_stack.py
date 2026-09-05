@@ -46,13 +46,17 @@ class EchoWMConnectorBlock(nn.Module):
             dim_head=head_dim,
             cross_attention_dim=None,
             qk_norm="rms_norm_across_heads",
+            pack_qkv=False,
             norm_eps=norm_eps,
             rope_type="split",
             apply_gated_attention=apply_gated_attention,
             quant_config=quant_config,
             prefix=f"{prefix}.attn1" if prefix else "attn1",
         )
-        self.attn1.set_processor(EchoWMCausalAttnProcessor())
+        self.attn1.set_processor(EchoWMCausalAttnProcessor(use_text_mask_kernel=True))
+        # Text context is replicated on every SP rank; only the causal AV
+        # transformer partitions tokens and owns sequence communication.
+        self.attn1.attn.skip_sequence_parallel = True
         self.ff = LTX2FeedForward(dim, quant_config=quant_config, prefix=f"{prefix}.ff" if prefix else "ff")
 
     def forward(self, hidden_states: torch.Tensor, rope: tuple[torch.Tensor, torch.Tensor] | None) -> torch.Tensor:
@@ -301,6 +305,21 @@ class EchoWMTextStack(nn.Module):
             if shard_id is not None:
                 loader(param, weight, shard_id)
             else:
+                from vllm.distributed import (
+                    get_tensor_model_parallel_rank,
+                    get_tensor_model_parallel_world_size,
+                )
+
+                tp_size = get_tensor_model_parallel_world_size()
+                if (
+                    tp_size > 1
+                    and loader is default_weight_loader
+                    and weight.ndim == 1
+                    and param.ndim == 1
+                    and weight.shape[0] == param.shape[0] * tp_size
+                ):
+                    start = get_tensor_model_parallel_rank() * param.shape[0]
+                    weight = weight[start : start + param.shape[0]]
                 loader(param, weight)
             loaded.add(name)
             loaded.add(target)

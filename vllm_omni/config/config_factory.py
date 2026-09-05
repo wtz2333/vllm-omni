@@ -33,6 +33,7 @@ from vllm_omni.config.stage_config import (
 )
 from vllm_omni.config.yaml_util import create_config
 from vllm_omni.diffusion.io_support import get_diffusion_output_type
+from vllm_omni.diffusion.model_metadata import get_diffusion_model_metadata
 from vllm_omni.diffusion.utils.hf_utils import _looks_like_dreamzero
 
 logger = init_logger(__name__)
@@ -269,13 +270,22 @@ class StageConfigFactory:
         user_deploy_config: DeployConfig | None = None,
     ) -> PipelineConfig | None:
         """Resolve the PipelineConfig for a model path/name."""
+        if user_deploy_config is None:
+            user_deploy_config = cls._load_user_deploy_config(deploy_config_path)
+        if Path(model).is_file() and user_deploy_config is not None:
+            pipeline = OMNI_PIPELINES.get(user_deploy_config.pipeline)
+            if (
+                isinstance(pipeline, PipelineConfig)
+                and get_diffusion_model_metadata(pipeline.model_arch).supports_single_file_checkpoint
+            ):
+                # Native pipelines own the embedded checkpoint config. Their
+                # explicit topology needs no transformers or Hub discovery.
+                return pipeline
         model_type = cls.try_infer_model_type(model=model, trust_remote_code=trust_remote_code)
         hf_config = cls.get_hf_config(model=model, trust_remote_code=trust_remote_code)
 
         # Resolve the deploy config & check if the user set the pipeline;
         # If the pipeline is explicitly set, it takes highest priority
-        if user_deploy_config is None:
-            user_deploy_config = cls._load_user_deploy_config(deploy_config_path)
         deploy_config_pipe = cls._get_deploy_override_pipe_config(hf_config, user_deploy_config)
         if deploy_config_pipe is not None:
             return deploy_config_pipe
