@@ -1611,6 +1611,7 @@ class OmniDiffusionConfig:
             self.model_class_name = native_single_file_model
             self.diffusers_pipeline_cls = None
             self.set_tf_model_config(TransformerConfig())
+            self.update_multimodal_support()
             return
 
         try:

@@ -89,37 +89,47 @@ class PropeDotProductAttention(torch.nn.Module):
         self.patches_y = patches_y
         self.image_width = image_width
         self.image_height = image_height
+        self.freq_base = freq_base
+        self.freq_scale = freq_scale
         coeffs_x = _rope_precompute_coeffs(
-            torch.tile(torch.arange(patches_x), (patches_y,)),
+            torch.tile(torch.arange(patches_x, device="cpu"), (patches_y,)),
             freq_base=freq_base,
             freq_scale=freq_scale,
             feat_dim=head_dim // 4,
         )
         coeffs_y = _rope_precompute_coeffs(
-            torch.repeat_interleave(torch.arange(patches_y), patches_x),
+            torch.repeat_interleave(torch.arange(patches_y, device="cpu"), patches_x),
             freq_base=freq_base,
             freq_scale=freq_scale,
             feat_dim=head_dim // 4,
         )
-        # Meta-device construction (weight loading) defers coefficient
-        # materialization to the first real forward.
-        if coeffs_x[0].is_meta:
-            coeffs_x = coeffs_y = (None, None)
-        self.register_buffer("coeffs_x_0", coeffs_x[0], persistent=False)
-        self.register_buffer("coeffs_x_1", coeffs_x[1], persistent=False)
-        self.register_buffer("coeffs_y_0", coeffs_y[0], persistent=False)
-        self.register_buffer("coeffs_y_1", coeffs_y[1], persistent=False)
-        self._materialize_coeffs_if_needed()
+        # ModelLedger builds the action branch outside its meta-device scope:
+        # these geometry constants are computed on CPU in FP32, then moved.
+        self._coefficients_cpu = dict(
+            coeffs_x_0=coeffs_x[0],
+            coeffs_x_1=coeffs_x[1],
+            coeffs_y_0=coeffs_y[0],
+            coeffs_y_1=coeffs_y[1],
+        )
+        for name, value in self._coefficients_cpu.items():
+            self.register_buffer(name, value, persistent=False)
 
-    @torch.no_grad()
-    def _materialize_coeffs_if_needed(self) -> None:
-        if self.coeffs_x_0 is None or self.coeffs_x_0.is_meta:
-            return
-        device = self.coeffs_x_0.device
-        self.coeffs_x_0 = self.coeffs_x_0.to(device)
-        self.coeffs_x_1 = self.coeffs_x_1.to(device)
-        self.coeffs_y_0 = self.coeffs_y_0.to(device)
-        self.coeffs_y_1 = self.coeffs_y_1.to(device)
+    def _apply(self, fn, recurse=True):
+        result = super()._apply(fn, recurse=recurse)
+        # Restore from the CPU constants, including after dtype conversion or
+        # meta/to_empty round trips. Widening rounded BF16 tables is not enough.
+        for name, value in self._coefficients_cpu.items():
+            setattr(self, name, value.to(device=getattr(self, name).device, dtype=torch.float32))
+        for name in ("apply_fn_q", "apply_fn_kv", "apply_fn_o"):
+            if hasattr(self, name):
+                setattr(self, name, None)
+        return result
+
+    def ensure_coefficients(self, device: torch.device) -> None:
+        for name, value in self._coefficients_cpu.items():
+            current = getattr(self, name)
+            if current.device != device or current.dtype != torch.float32:
+                setattr(self, name, value.to(device=device, dtype=torch.float32))
 
     def apply_fns_ready(self) -> bool:
         return getattr(self, "apply_fn_q", None) is not None
@@ -131,6 +141,7 @@ class PropeDotProductAttention(torch.nn.Module):
         coeffs_x: tuple[torch.Tensor, torch.Tensor] | None = None,
         coeffs_y: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> None:
+        self.ensure_coefficients(viewmats.device)
         batch, cameras, _, _ = viewmats.shape
         if viewmats.shape != (batch, cameras, 4, 4):
             raise ValueError(f"expected viewmats (B, C, 4, 4), got {tuple(viewmats.shape)}")
@@ -289,9 +300,10 @@ def _rope_precompute_coeffs(
         raise ValueError(f"feat_dim must be even, got {feat_dim}")
     num_freqs = feat_dim // 2
     freqs = freq_scale * (
-        freq_base ** (-torch.arange(num_freqs, device=positions.device)[None, None, None, :] / num_freqs)
+        freq_base
+        ** (-torch.arange(num_freqs, device=positions.device, dtype=torch.float32)[None, None, None, :] / num_freqs)
     )
-    angles = positions[None, None, :, None] * freqs
+    angles = positions.to(torch.float32)[None, None, :, None] * freqs
     return torch.cos(angles).to(dtype), torch.sin(angles).to(dtype)
 
 

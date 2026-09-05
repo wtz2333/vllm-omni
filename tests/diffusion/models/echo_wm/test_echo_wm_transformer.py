@@ -4,7 +4,7 @@
 
 Layout, sigma and weight-mapping contracts always run. Forward-parity tests
 additionally execute the Echo-WM reference implementation
-(``/data/wtz2333/WorldModel/JoyAI-Echo/echo_wm``) in-process and compare the
+(``ECHOWM_REFERENCE_ROOT``) in-process and compare the
 two implementations bit-for-bit on a tiny random model; they skip when the
 reference repository is absent (e.g. CI).
 """
@@ -39,54 +39,7 @@ from vllm_omni.diffusion.models.echo_wm.causal_cache import (
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
-_ECHO_ROOT = Path("/data/wtz2333/WorldModel/JoyAI-Echo/echo_wm")
-
-
-@pytest.fixture(autouse=True)
-def _init_distributed():
-    """Minimal world_size=1 TP group required to build the parallel linears."""
-    from vllm.distributed.parallel_state import (
-        cleanup_dist_env_and_memory,
-        init_distributed_environment,
-        initialize_model_parallel,
-    )
-
-    os.environ.setdefault("MASTER_ADDR", "localhost")
-    os.environ.setdefault("MASTER_PORT", "29517")
-    init_distributed_environment(
-        world_size=1,
-        rank=0,
-        local_rank=0,
-        distributed_init_method="env://",
-    )
-    initialize_model_parallel()
-    yield
-    cleanup_dist_env_and_memory()
-
-
-@pytest.fixture(autouse=True)
-def _force_default_gemm(monkeypatch):
-    """Force CPU-compatible GEMM dispatch for CPU test tensors."""
-    from vllm.model_executor.layers.utils import default_unquantized_gemm
-
-    monkeypatch.setattr(
-        "vllm.model_executor.layers.linear.dispatch_unquantized_gemm",
-        lambda: default_unquantized_gemm,
-    )
-
-
-@pytest.fixture(autouse=True)
-def _force_torch_sdpa():
-    """Pin TORCH_SDPA so CPU tests do not pick CUDA-only backends (FA3)."""
-    from vllm_omni.diffusion.config import set_current_diffusion_config
-    from vllm_omni.diffusion.data import AttentionConfig
-
-    od_config = SimpleNamespace(
-        diffusion_attention_config=AttentionConfig(default="TORCH_SDPA"),
-        parallel_config=SimpleNamespace(ring_degree=1),
-    )
-    with set_current_diffusion_config(od_config):
-        yield
+_ECHO_ROOT = Path(os.environ.get("ECHOWM_REFERENCE_ROOT", ""))
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +106,8 @@ def test_cross_slices_pin_reference_layout() -> None:
 def test_checkpoint_contract_rejects_drift() -> None:
     with pytest.raises(ValueError, match="checkpoint contract"):
         EchoWMTransformer3DModel.from_config({"num_layers": 24})
-    assert EchoWMTransformer3DModel.from_config({}).config.num_layers == 48
+    with torch.device("meta"):
+        assert EchoWMTransformer3DModel.from_config({}).config.num_layers == 48
 
 
 # ---------------------------------------------------------------------------
@@ -199,33 +153,31 @@ def _tiny_checkpoint(model: EchoWMTransformer3DModel) -> dict[str, torch.Tensor]
         next_value += 1
 
     for name, param in model.named_parameters():
-        if ".to_qkv." in name:
-            shard = param.shape[0] // 3
-            for projection in ("q", "k", "v"):
-                add(name.replace(".to_qkv.", f".to_{projection}."), (shard, *param.shape[1:]))
-            continue
         ref_name = name.replace(".ucpe.", ".").replace(".norm_q.", ".q_norm.").replace(".norm_k.", ".k_norm.")
         add(ref_name, param.shape)
     return weights
 
 
-def test_load_weights_maps_fused_qkv_and_ucpe_and_rejects_unknown() -> None:
+def test_load_weights_maps_unfused_qkv_and_ucpe_and_rejects_unknown() -> None:
     model = _tiny_model()
     checkpoint = _tiny_checkpoint(model)
     covered = model.load_weights(list(checkpoint.items()))
-    # Packed QKV tensors report both the checkpoint name and the fused name.
     assert set(checkpoint) <= covered
-    assert "transformer_blocks.0.attn1.to_qkv.weight" in covered
 
-    # The fused QKV weight now holds the checkpoint shards in order.
-    fused = dict(model.named_parameters())["transformer_blocks.0.attn1.to_qkv.weight"]
-    shard_rows = fused.shape[0] // 3
-    assert torch.equal(fused[:shard_rows], checkpoint["transformer_blocks.0.attn1.to_q.weight"])
-    assert torch.equal(fused[shard_rows : 2 * shard_rows], checkpoint["transformer_blocks.0.attn1.to_k.weight"])
-    assert torch.equal(fused[-shard_rows:], checkpoint["transformer_blocks.0.attn1.to_v.weight"])
+    # Self-attention projections stay unfused for GEMM-shape parity with the
+    # reference; checkpoint names map one-to-one.
+    params = dict(model.named_parameters())
+    assert torch.equal(
+        params["transformer_blocks.0.attn1.to_q.weight"], checkpoint["transformer_blocks.0.attn1.to_q.weight"]
+    )
+    assert torch.equal(
+        params["transformer_blocks.0.audio_attn1.to_k.weight"],
+        checkpoint["transformer_blocks.0.audio_attn1.to_k.weight"],
+    )
     # The nested UCPE branch received the block-level checkpoint tensors.
-    ucpe_weight = dict(model.named_parameters())["transformer_blocks.0.ucpe.ucpe_q_proj.weight"]
-    assert torch.equal(ucpe_weight, checkpoint["transformer_blocks.0.ucpe_q_proj.weight"])
+    assert torch.equal(
+        params["transformer_blocks.0.ucpe.ucpe_q_proj.weight"], checkpoint["transformer_blocks.0.ucpe_q_proj.weight"]
+    )
 
     with pytest.raises(KeyError, match="unknown Echo-WM transformer weight"):
         model.load_weights([("model.diffusion_model.not_a_weight", torch.zeros(1))])
@@ -362,14 +314,14 @@ def _se3_cameras(frames: int, batch: int = 1) -> tuple[torch.Tensor, torch.Tenso
 
 
 @pytest.fixture()
-def setup():
+def setup(request):
     ref = _reference_modules()
     reference = _tiny_reference(ref).eval()
     model = _tiny_model().eval()
     _copy_reference_weights(reference, model)
 
     ppf = 8
-    video_frames = 7
+    video_frames = getattr(request, "param", 7)
     audio_frames = causal_audio_frames(video_frames)
     cache_config = EchoWMCacheConfig()
     text_len = 6
@@ -596,7 +548,7 @@ def test_tiny_forward_parity_image_sink_and_two_blocks(setup) -> None:
     torch.testing.assert_close(port_vx, ref_vx, rtol=1e-5, atol=1e-5)
     torch.testing.assert_close(port_ax, ref_ax, rtol=1e-5, atol=1e-5)
 
-    # F4: second AV block (window starts evicting the FIFO tail).
+    # F4: second AV block, still inside the initial window.
     block_video_2 = torch.randn(1, 3 * ppf, 16)
     block_audio_2 = torch.randn(1, 25, 16)
     ref_vx, ref_ax = _reference_forward(setup, block_video_2, block_audio_2, 0.5, 0.5, 4 * ppf, 27)
@@ -634,3 +586,141 @@ def test_positions_match_reference_patchifier(setup) -> None:
     audio_reference = audio_patchifier.get_patch_grid_bounds(audio_shape, device=torch.device("cpu"))
     audio_mine = build_audio_positions(52)
     torch.testing.assert_close(audio_mine, audio_reference, rtol=0, atol=1e-7)
+
+
+@pytest.mark.parametrize("setup", [22], indirect=True)
+def test_reference_parity_across_fifo_eviction_and_anchor_change(setup):
+    """Cross the 19-frame window, then overwrite the final noisy block cleanly."""
+    image = torch.randn(1, setup.ppf, 16)
+    ref_v, _ = _reference_forward(setup, image, None, 0.0, 0.0, 0, 0)
+    port_v, _ = _port_forward(setup, image, None, 0.0, 0.0, 0, 0)
+    torch.testing.assert_close(port_v, ref_v, rtol=1e-5, atol=1e-5)
+    for (v_start, v_end), (a_start, a_end) in zip(causal_video_blocks(22), causal_audio_blocks(22), strict=True):
+        video = image if v_start == 0 else torch.randn(1, (v_end - v_start) * setup.ppf, 16)
+        audio = torch.randn(1, a_end - a_start, 16)
+        for sigma in (0.9, 0.0):
+            video_sigma = 0.0 if v_start == 0 else sigma
+            ref_v, ref_a = _reference_forward(setup, video, audio, video_sigma, sigma, v_start * setup.ppf, a_start)
+            port_v, port_a = _port_forward(setup, video, audio, video_sigma, sigma, v_start * setup.ppf, a_start)
+            torch.testing.assert_close(port_v, ref_v, rtol=1e-5, atol=1e-5)
+            torch.testing.assert_close(port_a, ref_a, rtol=1e-5, atol=1e-5)
+    # At frame 22, the 7-frame sink plus 12 recent frames skips frames 7..9.
+    expected = torch.cat([torch.arange(7 * setup.ppf), torch.arange(10 * setup.ppf, 22 * setup.ppf)])
+    for reference, port in zip(setup.ref_caches, setup.caches, strict=True):
+        for name in ("video_self", "video_ucpe", "v2a"):
+            cache = getattr(port, name)
+            assert cache.length == 19 * setup.ppf
+            torch.testing.assert_close(cache.positions[: cache.length], expected)
+            torch.testing.assert_close(cache.k[:, : cache.length].flatten(2), reference[name]["k"][:, : cache.length])
+
+
+def _sp_forward_case(model):
+    """Run real video-only, audio-prefix and uneven AV-block forwards."""
+    torch.manual_seed(42)
+    video_frames, ppf, text_len = 4, 8, 6
+    config = EchoWMCacheConfig()
+    video_positions = build_video_positions(video_frames, height=64, width=128, fps=24.0)
+    audio_positions = build_audio_positions(27)
+    cameras, intrinsics = _se3_cameras(video_frames)
+    caches = model.allocate_caches(
+        batch_size=1,
+        patches_per_frame=ppf,
+        text_seq_len=text_len,
+        cache_config=config,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    )
+    video_rope = make_split_rope(video_positions, dim=16, num_heads=2, max_pos=[20, 16, 16], out_dtype=torch.float32)
+    audio_rope = make_split_rope(audio_positions, dim=8, num_heads=2, max_pos=[20], out_dtype=torch.float32)
+    video_cross = make_cross_rope_template(video_positions, dim=8, num_heads=2, max_pos=20, out_dtype=torch.float32)
+    audio_cross = make_cross_rope_template(audio_positions, dim=8, num_heads=2, max_pos=20, out_dtype=torch.float32)
+    a2v, v2a = compute_cross_slices(video_frames, ppf, config)
+    for cache in caches:
+        cache.video_rope, cache.audio_rope = video_rope, audio_rope
+        cache.video_cross_rope, cache.audio_cross_rope = video_cross, audio_cross
+        cache.a2v_q_slices, cache.v2a_q_slices = a2v, v2a
+        cache.ucpe_full_viewmats, cache.ucpe_full_Ks = cameras, intrinsics
+        # Text K/V retain all TP-local heads independently of SP.
+        assert cache.video_text.k.shape[2] == 2
+        assert cache.audio_text.k.shape[2] == 2
+    video_context, audio_context = torch.randn(1, text_len, 16), torch.randn(1, text_len, 8)
+    image, prefix = torch.randn(1, ppf, 16), torch.randn(1, 2, 16)
+    video, audio = torch.randn(1, 3 * ppf, 16), torch.randn(1, 25, 16)
+    outputs = []
+    with torch.inference_mode():
+        for vx, ax, vs, aas, vf, at in (
+            (image, None, 0.0, 0.0, 0, 0),
+            (image, prefix, 0.0, 0.9, 0, 0),
+            (video, audio, 0.9, 0.9, 1, 2),
+            (video, audio, 0.0, 0.0, 1, 2),
+        ):
+            outputs.append(
+                model(
+                    video_tokens=vx,
+                    audio_tokens=ax,
+                    video_sigma=vs,
+                    audio_sigma=aas,
+                    video_context=video_context,
+                    audio_context=audio_context,
+                    caches=caches,
+                    video_token_start=vf * ppf,
+                    audio_token_start=at,
+                    ucpe_viewmats=cameras[:, vf : vf + vx.shape[1] // ppf],
+                    ucpe_Ks=intrinsics[:, vf : vf + vx.shape[1] // ppf],
+                    patches_per_frame=ppf,
+                )
+            )
+    return outputs
+
+
+def _sp_gloo_worker(rank, init_method, fixture_path):
+    from tests.diffusion.models.echo_wm.conftest import cpu_distributed, cpu_kernels
+    from vllm_omni.diffusion.models.echo_wm.transformer import (
+        _a2a_to_local,
+        _a2a_to_window,
+        _gather_tokens,
+        _shard_tokens,
+        _ulysses,
+    )
+
+    torch.set_num_threads(1)
+    with cpu_distributed(init_method, rank=rank, world_size=2, sp_size=2), cpu_kernels(sp_size=2):
+        uly = _ulysses()
+        # Length 1 exercises an empty rank; 25 is the production audio chunk.
+        for length in (1, 2, 24, 25):
+            full = torch.arange(2 * length * 2 * 4, dtype=torch.float32).reshape(2, length, 2, 4)
+            local = _shard_tokens(full, uly)
+            window = _a2a_to_window(local, uly, length)
+            torch.testing.assert_close(window, full[:, :, rank : rank + 1], rtol=0, atol=0)
+            restored = _a2a_to_local(window, uly, length)
+            torch.testing.assert_close(restored, local, rtol=0, atol=0)
+            gathered = _gather_tokens(restored.flatten(2), uly, length)
+            torch.testing.assert_close(gathered, full.flatten(2), rtol=0, atol=0)
+        fixture = torch.load(fixture_path, weights_only=True)
+        model = _tiny_model().eval()
+        model.load_state_dict(fixture["weights"])
+        outputs = _sp_forward_case(model)
+        for actual, expected in zip(outputs, fixture["outputs"], strict=True):
+            for a, e in zip(actual, expected, strict=True):
+                if e is None:
+                    assert a is None
+                else:
+                    torch.testing.assert_close(a, e, rtol=1e-5, atol=1e-6)
+        assert not torch.cuda.is_initialized()
+
+
+@pytest.mark.parallel
+def test_sp_gloo_collectives_and_forward_match_single_rank(tmp_path):
+    """Always runs in CI: two real Gloo ranks, no reference checkout or GPU."""
+    model = _tiny_model().eval()
+    with torch.no_grad():
+        for parameter in model.parameters():
+            parameter.normal_(0.0, 0.02)
+    fixture_path = tmp_path / "sp-baseline.pt"
+    torch.save({"weights": model.state_dict(), "outputs": _sp_forward_case(model)}, fixture_path)
+    torch.multiprocessing.spawn(
+        _sp_gloo_worker,
+        args=((tmp_path / "sp-init").as_uri(), fixture_path),
+        nprocs=2,
+        join=True,
+    )

@@ -5,8 +5,7 @@
 Port of the Echo-WM reference ``LTXModel`` (an LTX-2.3 audio-video DiT with a
 pure-UCPE camera branch on every block) onto vLLM-Omni primitives:
 
-* tensor parallelism via ``QKVParallelLinear``/``ColumnParallelLinear``/
-  ``RowParallelLinear`` with global-statistics QK RMS norms;
+* tensor parallelism via ``ColumnParallelLinear``/``RowParallelLinear`` with global-statistics QK RMS norms;
 * Ulysses sequence parallelism expressed *inside* the windowed attentions:
   projections run on the rank-local token shard, a head/sequence all-to-all
   produces the shared full-token window with per-rank head shards, and the
@@ -49,6 +48,7 @@ from vllm_omni.diffusion.models.ltx2.ltx2_transformer import (
     apply_split_rotary_emb,
 )
 
+from .attention import upstream_sdpa_kernel
 from .causal_cache import (
     EchoWMCacheConfig,
     EchoWMKVWindow,
@@ -77,7 +77,7 @@ def _linear_out(module: nn.Module, x: torch.Tensor) -> torch.Tensor:
 
 
 def _contiguous_split_lengths(total: int, world: int) -> list[int]:
-    """``tensor.chunk`` semantics: earlier ranks take the remainder."""
+    """Balanced contiguous shards; earlier ranks take one extra token."""
     base, rem = divmod(total, world)
     return [base + (1 if i < rem else 0) for i in range(world)]
 
@@ -137,7 +137,7 @@ def _pad_local_tokens(x: torch.Tensor, uly: _UlyssesState, global_len: int) -> t
     lens = _contiguous_split_lengths(global_len, uly.world_size)
     padded = max(lens)
     if x.shape[1] < padded:
-        x = F.pad(x, (0, 0, 0, 0, 0, padded - x.shape[1]))
+        x = F.pad(x, (0, 0) * (x.ndim - 2) + (0, padded - x.shape[1]))
     elif x.shape[1] > padded:
         raise ValueError(f"local shard {x.shape[1]} exceeds the padded chunk length {padded}")
     return x
@@ -159,6 +159,25 @@ def _strip_global_tokens(x: torch.Tensor, uly: _UlyssesState, global_len: int) -
     return torch.cat(chunks, dim=1)
 
 
+def _shard_tokens(x: torch.Tensor, uly: _UlyssesState) -> torch.Tensor:
+    """Take this rank's contiguous token chunk from a full-length stream."""
+    if not uly.active:
+        return x
+    lens = _contiguous_split_lengths(x.shape[1], uly.world_size)
+    start = sum(lens[: uly.rank])
+    return x[:, start : start + lens[uly.rank]]
+
+
+def _gather_tokens(x: torch.Tensor, uly: _UlyssesState, global_len: int) -> torch.Tensor:
+    """All-gather rank-local token chunks back into the full stream."""
+    if not uly.active:
+        return x
+    padded = _pad_local_tokens(x, uly, global_len).contiguous()
+    parts = [torch.empty_like(padded) for _ in range(uly.world_size)]
+    torch.distributed.all_gather(parts, padded, group=uly.group)
+    return _strip_global_tokens(torch.cat(parts, dim=1), uly, global_len)
+
+
 def _a2a_to_window(x: torch.Tensor, uly: _UlyssesState, global_len: int) -> torch.Tensor:
     """(B, S_local, H_tp, D) -> (B, S_full, H_uly, D): enter the shared window form."""
     if not uly.active:
@@ -172,9 +191,11 @@ def _a2a_to_local(x: torch.Tensor, uly: _UlyssesState, global_len: int) -> torch
     """Inverse of :func:`_a2a_to_window`: (B, S_full, H_uly, D) -> (B, S_local, H_tp, D)."""
     if not uly.active:
         return x
-    padded_out = _pad_local_tokens(x, uly, global_len)
-    local = SeqAllToAll4D.apply(uly.group, padded_out.contiguous(), 1, 2, False)
     lens = _contiguous_split_lengths(global_len, uly.world_size)
+    # Restore padding at each rank boundary, including an empty final shard.
+    # Padding only the tail would shift tokens between ranks for uneven splits.
+    padded_out = torch.cat([_pad_local_tokens(part, uly, global_len) for part in x.split(lens, dim=1)], dim=1)
+    local = SeqAllToAll4D.apply(uly.group, padded_out.contiguous(), 1, 2, False)
     return local[:, : lens[uly.rank]]
 
 
@@ -182,14 +203,22 @@ def _slice_rope_heads(
     rope: tuple[torch.Tensor, torch.Tensor] | None,
     uly: _UlyssesState,
     total_heads: int,
+    *,
+    use_ulysses: bool,
 ) -> tuple[torch.Tensor, torch.Tensor] | None:
-    """Select this rank's (TP x SP) head rows from a full-head RoPE template."""
+    """Select TP heads, adding the SP head shard only after windowed A2A."""
     if rope is None:
         return None
     cos, sin = rope
     if cos.ndim != 4 or cos.shape[1] != total_heads:
         raise ValueError(f"rope template must be (B, {total_heads}, T, D/2), got {tuple(cos.shape)}")
-    start, heads = _rank_head_slice(uly, total_heads)
+    if use_ulysses:
+        start, heads = _rank_head_slice(uly, total_heads)
+    else:
+        # Text connectors retain the full sequence and all TP-local heads on
+        # each SP rank. Their RoPE must use the same replicated head geometry.
+        heads = total_heads // uly.tp_size
+        start = uly.tp_rank * heads
     return cos[:, start : start + heads], sin[:, start : start + heads]
 
 
@@ -221,6 +250,9 @@ class EchoWMCausalAttnProcessor(LTX2AudioVideoAttnProcessor):
       RoPE; the output is converted back before gating/``to_out``.
     """
 
+    def __init__(self, *, use_text_mask_kernel: bool = False):
+        self.use_text_mask_kernel = use_text_mask_kernel
+
     def __call__(  # noqa: PLR0912, PLR0913
         self,
         attn: LTX2Attention,
@@ -237,6 +269,7 @@ class EchoWMCausalAttnProcessor(LTX2AudioVideoAttnProcessor):
         k_rope: tuple[torch.Tensor, torch.Tensor] | None = None,
         q_rope_slice: tuple[int, int] | None = None,
         global_query_len: int | None = None,
+        global_key_len: int | None = None,
     ) -> torch.Tensor:
         if attention_mask is not None:
             raise NotImplementedError(
@@ -273,12 +306,20 @@ class EchoWMCausalAttnProcessor(LTX2AudioVideoAttnProcessor):
         value = value.unflatten(2, (heads, head_dim))
 
         windowed = kv_cache is not None
+        window_heads = heads
         if windowed and uly.active:
             if global_query_len is None:
                 raise ValueError("global_query_len is required for windowed attention under sequence parallelism")
+            if global_key_len is None:
+                if not is_self_attention:
+                    raise ValueError(
+                        "global_key_len is required for windowed cross-attention under sequence parallelism"
+                    )
+                global_key_len = global_query_len
             query = _a2a_to_window(query, uly, global_query_len)
-            key = _a2a_to_window(key, uly, global_query_len)
-            value = _a2a_to_window(value, uly, global_query_len)
+            key = _a2a_to_window(key, uly, global_key_len)
+            value = _a2a_to_window(value, uly, global_key_len)
+            window_heads = heads // uly.world_size
 
         if windowed:
             key, value = kv_cache.update(kv_cache_start, key, value)
@@ -292,13 +333,13 @@ class EchoWMCausalAttnProcessor(LTX2AudioVideoAttnProcessor):
         else:
             q_slice = k_slice = None
 
-        local_q_rope = _slice_rope_heads(q_rope, uly, total_heads)
+        local_q_rope = _slice_rope_heads(q_rope, uly, total_heads, use_ulysses=windowed)
         if local_q_rope is not None:
             if k_rope is None:
                 raise ValueError("k_rope template is required when q_rope is given")
             if attn.rope_type != "split":
                 raise NotImplementedError(f"Echo-WM requires split rope, got {attn.rope_type}")
-            local_k_rope = _slice_rope_heads(k_rope, uly, total_heads)
+            local_k_rope = _slice_rope_heads(k_rope, uly, total_heads, use_ulysses=windowed)
             # apply_split_rotary_emb takes (B, S, H*D) and reshapes internally.
             flat_query = query.flatten(2, 3)
             flat_key = key.flatten(2, 3)
@@ -310,10 +351,11 @@ class EchoWMCausalAttnProcessor(LTX2AudioVideoAttnProcessor):
             else:
                 flat_query = apply_split_rotary_emb(flat_query, local_q_rope, head_dim=head_dim)
                 flat_key = apply_split_rotary_emb(flat_key, local_k_rope, head_dim=head_dim)
-            query = flat_query.unflatten(2, (heads, head_dim))
-            key = flat_key.unflatten(2, (heads, head_dim))
+            query = flat_query.unflatten(2, (window_heads, head_dim))
+            key = flat_key.unflatten(2, (window_heads, head_dim))
 
-        out = attn.attn(query, key, value, None)
+        with upstream_sdpa_kernel(query.device, text_cross=crossattn_cache is not None or self.use_text_mask_kernel):
+            out = attn.attn(query, key, value, None)
         if windowed and uly.active:
             out = _a2a_to_local(out, uly, global_query_len)
 
@@ -419,7 +461,7 @@ class EchoWMUCPEBranch(nn.Module):
         # head-major, so the local slice is a contiguous run of local heads.
         # Output is (B, S, H, D) — the cache layout; PRoPE transposes.
         b, s, _ = x.shape
-        return x.view(b, s, -1, self.head_dim)
+        return x.view(b, s, x.shape[-1] // self.head_dim, self.head_dim)
 
     def forward(
         self,
@@ -435,6 +477,7 @@ class EchoWMUCPEBranch(nn.Module):
         global_query_len: int | None = None,
     ) -> torch.Tensor:
         uly = _ulysses()
+        self.ucpe_prope.ensure_coefficients(norm_vx.device)
         q = self._split_heads(_linear_out(self.ucpe_q_proj, norm_vx))
         k = self._split_heads(_linear_out(self.ucpe_k_proj, norm_vx))
         v = self._split_heads(_linear_out(self.ucpe_v_proj, norm_vx))
@@ -492,14 +535,14 @@ class EchoWMUCPEBranch(nn.Module):
         q = self.ucpe_prope.transform(apply_q, q)
         k = self.ucpe_prope.transform(apply_kv, k)
         v = self.ucpe_prope.transform(apply_kv, v)
-        out = F.scaled_dot_product_attention(q, k, v, is_causal=False)
+        with upstream_sdpa_kernel(q.device):
+            out = F.scaled_dot_product_attention(q, k, v, is_causal=False)
         out = self.ucpe_prope.transform(apply_out, out).transpose(1, 2)  # back to (B, S, H, D)
 
         if uly.active:
             out = _a2a_to_local(out, uly, global_query_len)
         out = out.to(dtype=self.ucpe_out_proj.weight.dtype)
-        b, s, _, _ = out.shape
-        return _linear_out(self.ucpe_out_proj, out.reshape(b, s, -1))
+        return _linear_out(self.ucpe_out_proj, out.flatten(2))
 
 
 # ---------------------------------------------------------------------------
@@ -556,6 +599,7 @@ class EchoWMTransformerBlock(nn.Module):
             dim_head=video_head_dim,
             cross_attention_dim=None,
             qk_norm=qk_norm,
+            pack_qkv=False,
             prefix=f"{prefix}.attn1" if prefix else "attn1",
             **shared,
         )
@@ -580,6 +624,7 @@ class EchoWMTransformerBlock(nn.Module):
             dim_head=audio_head_dim,
             cross_attention_dim=None,
             qk_norm=qk_norm,
+            pack_qkv=False,
             prefix=f"{prefix}.audio_attn1" if prefix else "audio_attn1",
             **shared,
         )
@@ -639,6 +684,9 @@ class EchoWMTransformerBlock(nn.Module):
             self.video_to_audio_attn,
         ):
             attention.set_processor(EchoWMCausalAttnProcessor())
+            # This processor owns Ulysses reshards. Text K/V stay replicated
+            # across SP ranks, so neither path uses the generic SP strategy.
+            attention.attn.skip_sequence_parallel = True
 
         self.ucpe = (
             EchoWMUCPEBranch(
@@ -657,7 +705,7 @@ class EchoWMTransformerBlock(nn.Module):
         num = scale_shift_table.shape[0]
         values = (
             scale_shift_table[None, None].to(device=timestep.device, dtype=timestep.dtype)
-            + timestep.reshape(timestep.shape[0], timestep.shape[1], num, -1)
+            + timestep.reshape(timestep.shape[0], timestep.shape[1], num, scale_shift_table.shape[-1])
         ).unbind(dim=2)
         return values
 
@@ -730,6 +778,11 @@ class EchoWMTransformerBlock(nn.Module):
             )
         ):
             raise ValueError("cross-attention AdaLN requires the AV-CA timesteps")
+
+        if video_global_len is None:
+            video_global_len = vx.shape[1]
+        if ax is not None and audio_global_len is None:
+            audio_global_len = ax.shape[1]
 
         # 1. video self-attention (+ optional UCPE residual)
         vshift, vscale, vgate = self._ada(self.scale_shift_table, video_timestep)[0:3]
@@ -817,7 +870,7 @@ class EchoWMTransformerBlock(nn.Module):
             vx_scaled = vx_norm3 * (1 + scale_ca_video_a2v) + shift_ca_video_a2v
             ax_scaled = ax_norm3 * (1 + scale_ca_audio_a2v) + shift_ca_audio_a2v
             del scale_ca_video_a2v, shift_ca_video_a2v, scale_ca_audio_a2v, shift_ca_audio_a2v
-            q_slice = caches.a2v_q_slices.get((audio_token_start, audio_token_start + ax.shape[1]))
+            q_slice = caches.a2v_q_slices.get((audio_token_start, audio_token_start + audio_global_len))
             if q_slice is None:
                 raise ValueError(f"missing a2v query RoPE slice at audio start {audio_token_start}")
             vx = (
@@ -831,6 +884,7 @@ class EchoWMTransformerBlock(nn.Module):
                     k_rope=caches.audio_cross_rope,
                     q_rope_slice=q_slice,
                     global_query_len=video_global_len,
+                    global_key_len=audio_global_len,
                 )
                 * gate_out_a2v
             )
@@ -847,7 +901,7 @@ class EchoWMTransformerBlock(nn.Module):
             ax_scaled = ax_norm3 * (1 + scale_ca_audio_v2a) + shift_ca_audio_v2a
             vx_scaled = vx_norm3 * (1 + scale_ca_video_v2a) + shift_ca_video_v2a
             del scale_ca_audio_v2a, shift_ca_audio_v2a, scale_ca_video_v2a, shift_ca_video_v2a
-            q_slice = caches.v2a_q_slices.get((video_token_start, video_token_start + vx_norm3.shape[1]))
+            q_slice = caches.v2a_q_slices.get((video_token_start, video_token_start + video_global_len))
             if q_slice is None:
                 raise ValueError(f"missing v2a query RoPE slice at video start {video_token_start}")
             ax = (
@@ -861,6 +915,7 @@ class EchoWMTransformerBlock(nn.Module):
                     k_rope=caches.video_cross_rope,
                     q_rope_slice=q_slice,
                     global_query_len=audio_global_len,
+                    global_key_len=video_global_len,
                 )
                 * gate_out_v2a
             )
@@ -911,12 +966,6 @@ class EchoWMTransformer3DModel(nn.Module):
 
     _repeated_blocks = ["EchoWMTransformerBlock"]
     _layerwise_offload_blocks_attrs = ["transformer_blocks"]
-    packed_modules_mapping = {"to_qkv": ["to_q", "to_k", "to_v"]}
-    stacked_params_mapping = [
-        (".to_qkv.", ".to_q.", "q"),
-        (".to_qkv.", ".to_k.", "k"),
-        (".to_qkv.", ".to_v.", "v"),
-    ]
     # The checkpoint keeps the UCPE projections directly on the block; the port
     # nests them under the ``ucpe`` branch module.
     _param_renames = {
@@ -1113,6 +1162,9 @@ class EchoWMTransformer3DModel(nn.Module):
     ) -> list[EchoWMLayerCaches]:
         """Allocate one :class:`EchoWMLayerCaches` per layer, TP/SP sharded."""
         video_heads, audio_heads = self.local_head_counts()
+        tp_size = get_tensor_model_parallel_world_size()
+        video_text_heads = self.config.num_attention_heads // tp_size
+        audio_text_heads = self.config.audio_num_attention_heads // tp_size
         video_window = cache_config.video_local_attn_size * patches_per_frame
         video_sink = cache_config.video_sink_size * patches_per_frame
         audio_window = cache_config.audio_local_attn_size
@@ -1126,13 +1178,13 @@ class EchoWMTransformer3DModel(nn.Module):
             layer = EchoWMLayerCaches(
                 video_self=window(video_heads, self.config.attention_head_dim, video_window, video_window, video_sink),
                 video_text=EchoWMTextKV(
-                    batch_size, text_seq_len, video_heads, self.config.attention_head_dim, device, dtype
+                    batch_size, text_seq_len, video_text_heads, self.config.attention_head_dim, device, dtype
                 ),
                 audio_self=window(
                     audio_heads, self.config.audio_attention_head_dim, audio_window, audio_window, audio_sink
                 ),
                 audio_text=EchoWMTextKV(
-                    batch_size, text_seq_len, audio_heads, self.config.audio_attention_head_dim, device, dtype
+                    batch_size, text_seq_len, audio_text_heads, self.config.audio_attention_head_dim, device, dtype
                 ),
                 a2v=window(audio_heads, self.config.audio_attention_head_dim, audio_window, audio_window, audio_sink),
                 v2a=window(audio_heads, self.config.audio_attention_head_dim, video_window, video_window, video_sink),
@@ -1153,9 +1205,12 @@ class EchoWMTransformer3DModel(nn.Module):
     def _prepare_timesteps(
         self, sigma: float, adaln: LTX2AdaLayerNormSingle, tokens: int, dtype: torch.dtype, device: torch.device
     ) -> tuple[torch.Tensor, torch.Tensor]:
-        scaled = torch.full((tokens,), sigma * self.timestep_scale_multiplier, device=device, dtype=torch.float32)
+        # The reference quantizes sigma to the latent dtype before scaling;
+        # preserving both BF16 roundings is essential for the distilled model.
+        timesteps = torch.full((tokens,), sigma, device=device, dtype=dtype)
+        scaled = timesteps * self.timestep_scale_multiplier
         timestep, embedded = adaln(scaled, hidden_dtype=dtype)
-        return timestep.view(1, tokens, -1), embedded.view(1, tokens, -1)
+        return timestep.unsqueeze(0), embedded.unsqueeze(0)
 
     def forward(  # noqa: PLR0912, PLR0913
         self,
@@ -1185,6 +1240,15 @@ class EchoWMTransformer3DModel(nn.Module):
             raise ValueError("Echo-WM inference requires causal caches")
         dtype = self.patchify_proj.weight.dtype
         device = self.patchify_proj.weight.device
+        uly = _ulysses()
+        full_video_len = video_tokens.shape[1]
+        full_audio_len = audio_tokens.shape[1] if audio_tokens is not None else None
+        if uly.active:
+            # Ulysses entry: each rank processes its contiguous token shard and
+            # the outputs are gathered back to the full stream below.
+            video_tokens = _shard_tokens(video_tokens, uly)
+            if audio_tokens is not None:
+                audio_tokens = _shard_tokens(audio_tokens, uly)
 
         vx = self.patchify_proj(video_tokens.to(dtype))
         video_timestep, embedded_video = self._prepare_timesteps(
@@ -1212,7 +1276,7 @@ class EchoWMTransformer3DModel(nn.Module):
             prompt_timestep = self._prepare_timesteps(1.0, self.prompt_adaln_single, 1, dtype, device)[0]
             audio_prompt_timestep = self._prepare_timesteps(1.0, self.audio_prompt_adaln_single, 1, dtype, device)[0]
         # AV cross-attention AdaLN at the constant cross sigma = 1.
-        cross_step = torch.full((1,), float(self.timestep_scale_multiplier), device=device, dtype=torch.float32)
+        cross_step = torch.full((1,), float(self.timestep_scale_multiplier), device=device, dtype=dtype)
         av_factor = self.config.av_ca_timestep_scale_multiplier / self.timestep_scale_multiplier
         cross_scale_shift = self.av_ca_video_scale_shift_adaln_single(cross_step, hidden_dtype=dtype)[0].view(1, 1, -1)
         cross_gate = self.av_ca_a2v_gate_adaln_single(cross_step * av_factor, hidden_dtype=dtype)[0].view(1, 1, -1)
@@ -1224,9 +1288,9 @@ class EchoWMTransformer3DModel(nn.Module):
         )
 
         if video_global_len is None:
-            video_global_len = vx.shape[1]
+            video_global_len = full_video_len
         if audio_global_len is None and ax is not None:
-            audio_global_len = ax.shape[1]
+            audio_global_len = full_audio_len
 
         for layer_caches, block in zip(caches, self.transformer_blocks, strict=True):
             vx, ax = block(
@@ -1257,6 +1321,10 @@ class EchoWMTransformer3DModel(nn.Module):
             ax = self._process_output(
                 self.audio_scale_shift_table, self.audio_norm_out, self.audio_proj_out, ax, embedded_audio
             )
+        if uly.active:
+            vx = _gather_tokens(vx, uly, full_video_len)
+            if ax is not None:
+                ax = _gather_tokens(ax, uly, full_audio_len)
         return vx, ax
 
     @staticmethod
@@ -1294,27 +1362,25 @@ class EchoWMTransformer3DModel(nn.Module):
             for ckpt_pattern, model_pattern in self._param_renames.items():
                 if ckpt_pattern in target_name:
                     target_name = target_name.replace(ckpt_pattern, model_pattern)
-            shard_id: str | None = None
             param = params_dict.get(target_name)
-            if param is None:
-                # Direct miss: the self-attention projections are fused, so a
-                # separate to_q/to_k/to_v checkpoint tensor maps onto the fused
-                # QKV parameter with its stacked shard loader.
-                for fused_pattern, ckpt_pattern, sid in self.stacked_params_mapping:
-                    if ckpt_pattern in target_name:
-                        fused_name = target_name.replace(ckpt_pattern, fused_pattern)
-                        if fused_name in params_dict:
-                            target_name = fused_name
-                            shard_id = sid
-                            param = params_dict[fused_name]
-                            break
             if param is None:
                 raise KeyError(f"unknown Echo-WM transformer weight: {original!r} (looked up as {target_name!r})")
             weight_loader = getattr(param, "weight_loader", default_weight_loader)
-            if shard_id is not None:
-                weight_loader(param, weight, shard_id)
-            else:
-                weight_loader(param, weight)
+            tp_size = get_tensor_model_parallel_world_size()
+            if (
+                tp_size > 1
+                and weight_loader is default_weight_loader
+                and weight.ndim == 1
+                and param.ndim == 1
+                and weight.shape[0] == param.shape[0] * tp_size
+            ):
+                # Elementwise parameters of TP-sharded modules without their
+                # own loader (the QK norms): each rank keeps its contiguous
+                # feature slice. Parallel-linear biases are left whole for
+                # their own stacked loaders to narrow.
+                start = get_tensor_model_parallel_rank() * param.shape[0]
+                weight = weight[start : start + param.shape[0]]
+            weight_loader(param, weight)
             loaded.add(original)
             loaded.add(target_name)
         return loaded

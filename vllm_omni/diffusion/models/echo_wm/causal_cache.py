@@ -344,7 +344,9 @@ def build_audio_positions(
         mel = (mel + 1 - latent_downsample).clamp(min=0)
         return mel * hop_length / sample_rate
 
-    latent_index = torch.arange(num_frames, device=device)
+    # The reference starts with FP32 indices. Integer true-division uses
+    # different rounding from its floating-point timestamp arithmetic.
+    latent_index = torch.arange(num_frames, device=device, dtype=torch.float32)
     start = frame_time(latent_index)
     end = frame_time(latent_index + 1)
     coords = torch.stack((start, end), dim=-1).float()  # (T, 2)

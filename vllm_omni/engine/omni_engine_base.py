@@ -362,6 +362,19 @@ class OmniEngineBase:
             if model_class_name is None:
                 # use registered diffusers cls name as fallback
                 model_class_name = getattr(self.pipeline_config, "diffusers_class_name", None)
+            if model_class_name is None and Path(self.model).is_file():
+                # Native checkpoints have no HF metadata. Use the explicit
+                # architecture carried by the resolved diffusion stage.
+                for stage in self.stage_configs:
+                    engine_args = getattr(stage, "engine_args", None)
+                    candidate = (
+                        engine_args.get("model_class_name")
+                        if hasattr(engine_args, "get")
+                        else getattr(engine_args, "model_class_name", None)
+                    )
+                    if candidate is not None:
+                        model_class_name = candidate
+                        break
             metadata = get_diffusion_model_metadata(model_class_name)
             self._diffusion_od_config_view = SimpleNamespace(
                 model_class_name=model_class_name,

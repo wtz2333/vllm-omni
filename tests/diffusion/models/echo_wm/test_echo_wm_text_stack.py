@@ -2,7 +2,8 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM project
 """Echo-WM text-stack parity tests against the reference ``EmbeddingsProcessor``.
 
-Skipped when the Echo-WM reference repository is absent (CI).
+Reference parity skips when the upstream checkout is absent. The CPU Gloo
+SP regression runs without that optional dependency.
 """
 
 from __future__ import annotations
@@ -18,53 +19,7 @@ from vllm_omni.diffusion.models.echo_wm.text_stack import EchoWMTextStack
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
 
-_ECHO_ROOT = Path("/data/wtz2333/WorldModel/JoyAI-Echo/echo_wm")
-
-
-@pytest.fixture(autouse=True)
-def _init_distributed():
-    from vllm.distributed.parallel_state import (
-        cleanup_dist_env_and_memory,
-        init_distributed_environment,
-        initialize_model_parallel,
-    )
-
-    os.environ.setdefault("MASTER_ADDR", "localhost")
-    os.environ.setdefault("MASTER_PORT", "29707")
-    init_distributed_environment(
-        world_size=1,
-        rank=0,
-        local_rank=0,
-        distributed_init_method="env://",
-    )
-    initialize_model_parallel()
-    yield
-    cleanup_dist_env_and_memory()
-
-
-@pytest.fixture(autouse=True)
-def _force_default_gemm(monkeypatch):
-    from vllm.model_executor.layers.utils import default_unquantized_gemm
-
-    monkeypatch.setattr(
-        "vllm.model_executor.layers.linear.dispatch_unquantized_gemm",
-        lambda: default_unquantized_gemm,
-    )
-
-
-@pytest.fixture(autouse=True)
-def _force_torch_sdpa():
-    from types import SimpleNamespace
-
-    from vllm_omni.diffusion.config import set_current_diffusion_config
-    from vllm_omni.diffusion.data import AttentionConfig
-
-    od_config = SimpleNamespace(
-        diffusion_attention_config=AttentionConfig(default="TORCH_SDPA"),
-        parallel_config=SimpleNamespace(ring_degree=1),
-    )
-    with set_current_diffusion_config(od_config):
-        yield
+_ECHO_ROOT = Path(os.environ.get("ECHOWM_REFERENCE_ROOT", ""))
 
 
 def _reference():
@@ -199,3 +154,75 @@ def test_text_stack_load_weights_maps_checkpoint_names():
     # Non-text checkpoint names are skipped so the pipeline can dispatch by
     # prefix; the strict loader check lives one level up.
     assert "not_a_text_weight" not in stack.load_weights([("not_a_text_weight", torch.zeros(1))])
+
+
+def _tiny_parallel_text_stack():
+    stack = (
+        EchoWMTextStack(
+            gemma_hidden_size=8,
+            gemma_num_layers=2,
+            video_dim=16,
+            audio_dim=8,
+            connector_num_layers=2,
+            video_heads=2,
+            video_head_dim=8,
+            audio_heads=2,
+            audio_head_dim=4,
+            num_registers=8,
+            rope_max_pos=64,
+        )
+        .float()
+        .eval()
+    )
+
+    # Parallel linears allocate empty storage for checkpoint loading.
+    # Initialize all weights before creating the SP=1 oracle.
+    with torch.no_grad():
+        for parameter in stack.parameters():
+            parameter.normal_(0.0, 0.02)
+    return stack
+
+
+def _text_stack_sp_worker(rank, init_method, fixture_path):
+    from tests.diffusion.models.echo_wm.conftest import cpu_distributed, cpu_kernels
+
+    torch.set_num_threads(1)
+    with cpu_distributed(init_method, rank=rank, world_size=2, sp_size=2), cpu_kernels(sp_size=2):
+        fixture = torch.load(fixture_path, weights_only=True)
+        stack = _tiny_parallel_text_stack()
+        stack.load_state_dict(fixture["weights"])
+        with torch.inference_mode():
+            video, audio = stack(fixture["hidden_states"], fixture["attention_mask"])
+        # Connectors are fully replicated across SP ranks, so GEMM shapes and
+        # all tensor values must stay identical to the single-rank baseline.
+        torch.testing.assert_close(video, fixture["video"], rtol=0, atol=0)
+        torch.testing.assert_close(audio, fixture["audio"], rtol=0, atol=0)
+        assert not torch.cuda.is_initialized()
+
+
+@pytest.mark.parallel
+def test_text_stack_sp2_gloo_matches_single_rank(tmp_path):
+    """Exercise Gemma feature projection and both connectors with active SP."""
+    torch.manual_seed(17)
+    stack = _tiny_parallel_text_stack()
+    hidden_states = torch.randn(1, 8, 8, 3)
+    attention_mask = torch.tensor([[0, 0, 0, 1, 1, 1, 1, 1]])
+    with torch.inference_mode():
+        video, audio = stack(hidden_states, attention_mask)
+    fixture_path = tmp_path / "text-stack-baseline.pt"
+    torch.save(
+        {
+            "weights": stack.state_dict(),
+            "hidden_states": hidden_states,
+            "attention_mask": attention_mask,
+            "video": video,
+            "audio": audio,
+        },
+        fixture_path,
+    )
+    torch.multiprocessing.spawn(
+        _text_stack_sp_worker,
+        args=((tmp_path / "text-sp-init").as_uri(), fixture_path),
+        nprocs=2,
+        join=True,
+    )
