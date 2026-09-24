@@ -425,6 +425,62 @@ class TestCameraHandlers:
         assert session.active_event is None
         assert session.current_pose.translation[2] == pytest.approx(0.0)
 
+    def test_paced_camera_keeps_events_after_window_for_next_chunk(self) -> None:
+        handler = SE3DeltaCameraHandler()
+        state = _make_state()
+        state.sampling.streaming_buffer_seconds = 1.25
+        handler.apply_at_chunk_boundary(state, num_media_frames=3, num_latent_frames=3, fps=3.0, boundary_at=10.0)
+        for event_id, received_at in (("inside", 10.5), ("at-cutoff", 11.0)):
+            handler.enqueue(
+                state,
+                event_id=event_id,
+                received_at=received_at,
+                payload=_FORWARD_VELOCITY,
+                transition_chunks=None,
+            )
+
+        current = handler.apply_at_chunk_boundary(
+            state, num_media_frames=3, num_latent_frames=3, fps=3.0, boundary_at=11.0
+        )
+        assert current.started_event_ids == ["inside"]
+        session = state.interaction_sessions["camera"]
+        assert [event.event_id for event in session.pending_events] == ["at-cutoff"]
+
+        following = handler.apply_at_chunk_boundary(
+            state, num_media_frames=3, num_latent_frames=3, fps=3.0, boundary_at=12.0
+        )
+        assert following.started_event_ids == ["at-cutoff"]
+
+    def test_paced_short_press_and_release_preserves_partial_motion(self) -> None:
+        handler = SE3DeltaCameraHandler()
+        state = _make_state()
+        state.sampling.streaming_buffer_seconds = 1.25
+        handler.apply_at_chunk_boundary(state, num_media_frames=3, num_latent_frames=3, fps=3.0, boundary_at=0.0)
+        handler.enqueue(state, event_id="press", received_at=0.1, payload=_FORWARD_VELOCITY, transition_chunks=None)
+        handler.enqueue(
+            state,
+            event_id="release",
+            received_at=0.2,
+            payload={"mode": "velocity", "data": {"translation": [0, 0, 0], "rotation": [0, 0, 0, 1]}},
+            transition_chunks=None,
+        )
+
+        meta = handler.apply_at_chunk_boundary(state, num_media_frames=3, num_latent_frames=3, fps=3.0, boundary_at=1.0)
+        session = state.interaction_sessions["camera"]
+        assert meta.started_event_ids == ["press", "release"]
+        assert session.last_absolute_poses[0, 2, 3].item() == pytest.approx(0.015)
+        assert session.last_absolute_poses[2, 2, 3].item() == pytest.approx(0.015)
+
+    def test_paced_first_short_chunk_scales_motion_by_media_time(self) -> None:
+        handler = SE3DeltaCameraHandler()
+        state = _make_state()
+        state.sampling.streaming_buffer_seconds = 1.25
+        handler.apply_at_chunk_boundary(state, num_media_frames=9, num_latent_frames=3, fps=16.0, boundary_at=0.0)
+        handler.enqueue(state, event_id="hold", received_at=0.0, payload=_FORWARD_VELOCITY, transition_chunks=None)
+        handler.apply_at_chunk_boundary(state, num_media_frames=12, num_latent_frames=3, fps=16.0, boundary_at=9 / 16)
+        session = state.interaction_sessions["camera"]
+        assert session.last_absolute_poses[2, 2, 3].item() == pytest.approx(0.05 * 3 * 0.75)
+
 
 class TestResolveEventFrameOffset:
     def test_clamps_and_floors(self) -> None:

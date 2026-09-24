@@ -13,6 +13,7 @@ Protocol:
                 "transition_chunks": (optional, integer),
             },
         }
+        {"type": "session.playback", "position_seconds": 1.25}  # opt-in playback feedback
         {"type": "session.stop"}
         {"type": "session.ping"}  # optional; refreshes stall clock
 
@@ -31,6 +32,7 @@ from __future__ import annotations
 import asyncio
 import copy
 import json
+import math
 import time
 import uuid
 from collections.abc import AsyncGenerator
@@ -114,6 +116,7 @@ class OmniStreamingVideoOutputHandler:
         control_task: asyncio.Task[None] | None = None
         stopped = False
         chunks_sent = 0
+        generation_done = False
         interaction_payloads_by_id: dict[str, OmniInteractionPrompt] = {}
 
         try:
@@ -143,6 +146,7 @@ class OmniStreamingVideoOutputHandler:
                     send_lock,
                     progress,
                     interaction_payloads_by_id,
+                    request.streaming_buffer_seconds is not None,
                 )
             )
             async for chunk, metadata in self._stream_video_bytes(request, request_id, output_format, progress):
@@ -156,6 +160,7 @@ class OmniStreamingVideoOutputHandler:
                 chunks_sent += 1
                 progress.touch()
 
+            generation_done = True
             async with send_lock:
                 await websocket.send_json(
                     {
@@ -190,6 +195,8 @@ class OmniStreamingVideoOutputHandler:
             if control_task is not None:
                 control_task.cancel()
                 await asyncio.gather(control_task, return_exceptions=True)
+            if request_id is not None and not generation_done:
+                await self._abort_request(request_id)
 
     async def _receive_start(self, websocket: WebSocket) -> tuple[VideoGenerationRequest, StreamingVideoFormat] | None:
         try:
@@ -268,6 +275,7 @@ class OmniStreamingVideoOutputHandler:
         send_lock: asyncio.Lock,
         progress: _SessionProgress,
         interaction_payloads_by_id: dict[str, OmniInteractionPrompt],
+        track_playback: bool,
     ) -> None:
         while not stop_event.is_set():
             if progress.stalled_for(self._stall_timeout):
@@ -288,6 +296,10 @@ class OmniStreamingVideoOutputHandler:
                 )
             except asyncio.TimeoutError:
                 continue
+            except WebSocketDisconnect:
+                stop_event.set()
+                await self._abort_request(request_id)
+                return
 
             if len(raw) > _MAX_CONTROL_MESSAGE_SIZE:
                 await self._send_error(websocket, "control message too large", send_lock=send_lock)
@@ -316,6 +328,28 @@ class OmniStreamingVideoOutputHandler:
                 except Exception:
                     pass
                 continue
+            if msg_type == "session.playback":
+                position = msg.get("position_seconds")
+                if (
+                    isinstance(position, bool)
+                    or not isinstance(position, (int, float))
+                    or not math.isfinite(position)
+                    or position < 0
+                ):
+                    await self._send_error(
+                        websocket, "position_seconds must be finite and non-negative", send_lock=send_lock
+                    )
+                    continue
+                try:
+                    await self._engine_client.update_streaming_playback(request_id, position)
+                except Exception:
+                    logger.exception("Failed to update streaming playback for %s", request_id)
+                    await self._send_error(websocket, "Failed to update playback", send_lock=send_lock)
+                    stop_event.set()
+                    await self._abort_request(request_id)
+                    return
+                progress.touch()
+                continue
             if msg_type == "session.interaction":
                 await self._handle_interaction(
                     websocket,
@@ -323,6 +357,7 @@ class OmniStreamingVideoOutputHandler:
                     request_id=request_id,
                     send_lock=send_lock,
                     interaction_payloads_by_id=interaction_payloads_by_id,
+                    track_playback=track_playback,
                 )
                 continue
             await self._send_error(websocket, f"Unknown message type: {msg_type}", send_lock=send_lock)
@@ -341,6 +376,7 @@ class OmniStreamingVideoOutputHandler:
         request_id: str,
         send_lock: asyncio.Lock,
         interaction_payloads_by_id: dict[str, OmniInteractionPrompt],
+        track_playback: bool = False,
     ) -> None:
         interaction = msg.get("interaction")
         if not isinstance(interaction, dict):
@@ -459,10 +495,12 @@ class OmniStreamingVideoOutputHandler:
         interaction_payloads_by_id[event_id] = normalized
 
         try:
-            await self._engine_client.submit_interaction_async(
-                request_id,
-                interaction=normalized,
-            )
+            if track_playback:
+                await self._engine_client.submit_interaction_async(
+                    request_id, interaction=normalized, track_playback=True
+                )
+            else:
+                await self._engine_client.submit_interaction_async(request_id, interaction=normalized)
         except Exception:
             logger.exception("Failed to apply interaction for request %s", request_id, exc_info=True)
             interaction_payloads_by_id.pop(event_id, None)
@@ -554,6 +592,7 @@ class OmniStreamingVideoOutputHandler:
             prompt["negative_prompt"] = request.negative_prompt
 
         gen_params = self._resolve_default_sampling_params()
+        gen_params.streaming_buffer_seconds = request.streaming_buffer_seconds
         vp = request.resolve_video_params()
         input_image = await self._decode_image_reference(request)
         if input_image is not None:

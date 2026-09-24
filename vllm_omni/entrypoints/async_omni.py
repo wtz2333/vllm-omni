@@ -596,11 +596,22 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
         internal_ids = [s.request_id for s in self.request_states.values() if s.external_request_id in request_ids]
         await self._abort(internal_ids, timeout=timeout)
 
+    async def update_streaming_playback(self, request_id: str, position_seconds: float) -> None:
+        """Forward external-session playback progress to the diffusion engine."""
+        if self.num_stages != 1 or self.engine.get_stage_metadata(0).stage_type != "diffusion":
+            raise ValueError("playback feedback requires single-stage diffusion")
+        for state in list(self.request_states.values()):
+            if state.external_request_id == request_id:
+                await self._engine_core_rpc(
+                    "update_streaming_playback", stage_ids=[0], args=(state.request_id, position_seconds)
+                )
+
     async def submit_interaction_async(
         self,
         request_id: str,
         *,
         interaction: OmniInteractionPrompt,
+        track_playback: bool = False,
     ) -> None:
         """Apply a midway interaction to an active streaming diffusion request.
 
@@ -629,10 +640,27 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
                 f"interaction requires exactly one active request for {request_id!r}, found {len(internal_ids)}"
             )
 
-        await self.engine.submit_interaction_async(
-            internal_ids[0],
-            interaction=interaction,
-        )
+        internal_id = internal_ids[0]
+        received_at = None
+        if track_playback:
+            event_id = interaction["event_id"]
+            stamps = await self._engine_core_rpc(
+                "track_streaming_interaction", stage_ids=[0], args=(internal_id, event_id)
+            )
+            received_at = next((stamp for stamp in stamps if stamp is not None), None)
+            # The engine owns the action clock; clients cannot assign an earlier window.
+            interaction = {**interaction}
+            interaction.pop("received_at", None)
+            if received_at is not None:
+                interaction["received_at"] = received_at
+        try:
+            await self.engine.submit_interaction_async(internal_id, interaction=interaction)
+        except Exception:
+            if received_at is not None:
+                await self._engine_core_rpc(
+                    "track_streaming_interaction", stage_ids=[0], args=(internal_id, event_id, False)
+                )
+            raise
         if self.log_stats:
             logger.info("[AsyncOmni] Queued interaction for request %s", request_id)
 

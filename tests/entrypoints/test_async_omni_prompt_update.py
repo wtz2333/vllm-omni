@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Entrypoint contract tests for ``AsyncOmni.submit_interaction_async``."""
 
 from __future__ import annotations
@@ -44,6 +44,17 @@ def _make_async_omni(*, num_stages: int = 1, stage_type: str = "diffusion") -> A
     return omni
 
 
+@pytest.mark.asyncio
+async def test_playback_feedback_maps_session_id_and_ignores_finished_session(mocker) -> None:
+    omni = _make_async_omni()
+    omni.request_states.pop("external-abc-uuid-2")
+    rpc = mocker.patch.object(omni, "_engine_core_rpc", new=mocker.AsyncMock())
+    await omni.update_streaming_playback("external-abc", 0.5)
+    rpc.assert_awaited_once_with("update_streaming_playback", stage_ids=[0], args=("external-abc-uuid-1", 0.5))
+    await omni.update_streaming_playback("finished", 9.0)
+    assert rpc.await_count == 1
+
+
 def _prompt_interaction(prompt: str = "new prompt", transition_chunks: int | None = None) -> OmniInteractionPrompt:
     interaction: OmniInteractionPrompt = {"event_id": "ui-update-1", "event": {"prompt": prompt}}
     if transition_chunks is not None:
@@ -65,6 +76,22 @@ async def test_submit_interaction_async_maps_external_to_internal_id() -> None:
     omni.engine.submit_interaction_async.assert_awaited_once_with(  # pyright: ignore[reportAttributeAccessIssue]
         "external-abc-uuid-1",
         interaction=_prompt_interaction(transition_chunks=2),
+    )
+
+
+@pytest.mark.asyncio
+async def test_paced_interaction_reserves_action_time_before_enqueue(mocker) -> None:
+    omni = _make_async_omni()
+    omni.request_states.pop("external-abc-uuid-2")
+    rpc = mocker.patch.object(omni, "_engine_core_rpc", new=mocker.AsyncMock(return_value=[12.5]))
+
+    await omni.submit_interaction_async("external-abc", interaction=_prompt_interaction(), track_playback=True)
+
+    rpc.assert_awaited_once_with(
+        "track_streaming_interaction", stage_ids=[0], args=("external-abc-uuid-1", "ui-update-1")
+    )
+    omni.engine.submit_interaction_async.assert_awaited_once_with(  # pyright: ignore[reportAttributeAccessIssue]
+        "external-abc-uuid-1", interaction={**_prompt_interaction(), "received_at": 12.5}
     )
 
 
