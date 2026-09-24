@@ -92,6 +92,7 @@ class CameraSession(InteractionSession):
 
     current_pose: CameraPose = field(default_factory=CameraPose.identity)
     pending_events: list[QueuedCameraEvent] = field(default_factory=list)
+    window_deadline_at: float | None = None
     # In-flight command; ``elapsed_transition_chunks`` lives on the event.
     active_event: QueuedCameraEvent | None = None
     target_source: CameraPose | None = None
@@ -235,7 +236,13 @@ class SE3DeltaCameraHandler(InteractionHandler):
                 fps=fps,
                 num_latent_frames=num_latent_frames,
                 boundary_at=boundary_at,
+                cutoff_at=(
+                    session.window_deadline_at
+                    if getattr(state.sampling, "streaming_buffer_seconds", None) is not None
+                    else None
+                ),
             )
+            session.window_deadline_at = boundary_at + num_media_frames / fps if fps > 0 else None
             if poses:
                 session.last_absolute_poses = torch.stack([p.as_matrix() for p in poses], dim=0)
             else:
@@ -255,12 +262,34 @@ class SE3DeltaCameraHandler(InteractionHandler):
         fps: float,
         num_latent_frames: int,
         boundary_at: float,
+        cutoff_at: float | None = None,
     ) -> tuple[list[CameraPose], list[str], list[str], list[str]]:
         """Sample absolute poses for this chunk under target/velocity semantics."""
         num_media_frames = max(int(num_media_frames), 1)
         num_latent_frames = max(int(num_latent_frames), 1)
-        pending = list(session.pending_events)
-        session.pending_events.clear()
+        if cutoff_at is None:
+            pending = list(session.pending_events)
+            session.pending_events.clear()
+        else:
+            pending = [event for event in session.pending_events if event.received_at < cutoff_at]
+            session.pending_events = [event for event in session.pending_events if event.received_at >= cutoff_at]
+
+        if (
+            cutoff_at is not None
+            and session.last_boundary_at is not None
+            and cutoff_at > session.last_boundary_at
+            and (session.active_event is None or session.active_event.mode == "velocity")
+            and all(event.mode == "velocity" for event in pending)
+        ):
+            return self._step_velocity_window(
+                session,
+                pending,
+                num_latent_frames=num_latent_frames,
+                window_start=session.last_boundary_at,
+                window_end=cutoff_at,
+                boundary_at=boundary_at,
+                control_step_seconds=num_media_frames / fps / num_latent_frames,
+            )
 
         by_latent: dict[int, list[QueuedCameraEvent]] = {}
         for event in pending:
@@ -305,6 +334,55 @@ class SE3DeltaCameraHandler(InteractionHandler):
             active.append(session.active_event.event_id)
 
         session.last_boundary_at = boundary_at
+        return poses, started, active, completed
+
+    def _step_velocity_window(
+        self,
+        session: CameraSession,
+        pending: list[QueuedCameraEvent],
+        *,
+        num_latent_frames: int,
+        window_start: float,
+        window_end: float,
+        boundary_at: float,
+        control_step_seconds: float,
+    ) -> tuple[list[CameraPose], list[str], list[str], list[str]]:
+        """Integrate held camera velocity over each latent control interval."""
+        pending.sort(key=lambda event: event.received_at)
+        slot_duration = (window_end - window_start) / num_latent_frames
+        poses: list[CameraPose] = []
+        started: list[str] = []
+        completed: list[str] = []
+        event_index = 0
+
+        def advance(duration: float) -> None:
+            active_event = session.active_event
+            if active_event is not None and duration > 0:
+                fraction = duration / control_step_seconds
+                session.current_pose = _compose_pose(
+                    session.current_pose,
+                    _lerp_pose(CameraPose.identity(), active_event.pose, fraction),
+                )
+
+        for latent_idx in range(num_latent_frames):
+            slot_start = window_start + latent_idx * slot_duration
+            slot_end = slot_start + slot_duration
+            cursor = slot_start
+            while event_index < len(pending) and pending[event_index].received_at < slot_end:
+                event = pending[event_index]
+                event_at = max(cursor, min(event.received_at, slot_end))
+                advance(event_at - cursor)
+                cancelled_id = self._activate_event(session, event)
+                if cancelled_id is not None:
+                    completed.append(cancelled_id)
+                started.append(event.event_id)
+                cursor = event_at
+                event_index += 1
+            advance(slot_end - cursor)
+            poses.append(session.current_pose.clone())
+
+        session.last_boundary_at = boundary_at
+        active = [session.active_event.event_id] if session.active_event is not None else []
         return poses, started, active, completed
 
     def _activate_event(self, session: CameraSession, event: QueuedCameraEvent) -> str | None:

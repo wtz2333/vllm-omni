@@ -240,6 +240,9 @@ class StageDiffusionProc:
         """
         # Feedback only changes condition-protected host state and must not
         # wait behind an executor RPC for the current GPU chunk.
+        if method == "track_streaming_interaction":
+            assert self._engine is not None
+            return self._engine.track_streaming_interaction(*args, **(kwargs or {}))
         if method == "update_streaming_playback":
             assert self._engine is not None
             return self._engine.update_streaming_playback(*args, **(kwargs or {}))
@@ -526,7 +529,7 @@ class StageDiffusionProc:
                         self._engine.abort(rid)
 
                 elif msg_type == "collective_rpc":
-                    if msg["method"] == "update_streaming_playback":
+                    if msg["method"] in ("update_streaming_playback", "track_streaming_interaction"):
                         await _dispatch_rpc(msg)
                     else:
                         try:

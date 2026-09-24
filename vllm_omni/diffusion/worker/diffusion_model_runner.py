@@ -12,6 +12,7 @@ from __future__ import annotations
 
 import copy
 import gc
+import math
 import time
 from collections.abc import Callable
 from contextlib import AbstractContextManager, nullcontext
@@ -1112,9 +1113,8 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 try:
                     clear_pipeline_stage_durations(pipeline)
                     if state.request_id in new_request_ids:
-                        if state.sampling.streaming_buffer_seconds is not None and not supports_interaction_apply(
-                            pipeline
-                        ):
+                        paced = getattr(state.sampling, "streaming_buffer_seconds", None) is not None
+                        if paced and not supports_interaction_apply(pipeline):
                             raise ValueError("playback feedback requires an interactive chunked pipeline")
                         self._initialize_generator(state.sampling)
                         pipeline.prepare_encode(state)
@@ -1373,11 +1373,14 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                                 should_decode = req.denoise_completed
 
                             streaming_media_duration = 0.0
+                            streaming_action_deadline = 0.0
                             if should_decode:
-                                if req.sampling.streaming_buffer_seconds is not None:
+                                if getattr(req.sampling, "streaming_buffer_seconds", None) is not None:
                                     streaming_media_duration = (
                                         cast(SupportsInteractionApply, pipeline).peek_chunk_media(req).duration_s
                                     )
+                                    camera = req.interaction_sessions.get("camera")
+                                    streaming_action_deadline = float(getattr(camera, "window_deadline_at", 0.0) or 0.0)
                                 clear_pipeline_stage_durations(pipeline)
                                 result = pipeline.post_decode(req)
                                 if result is not None:
@@ -1387,7 +1390,12 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                                         result,
                                     )
                                     if supports_interaction_apply(pipeline) and not req.request_denoise_completed:
-                                        req.pending_chunk_boundary = True
+                                        if getattr(req.sampling, "streaming_buffer_seconds", None) is not None:
+                                            req.pending_chunk_boundary = True
+                                        else:
+                                            pipe = cast(SupportsInteractionApply, pipeline)
+                                            pipe.apply_interaction_at_chunk_boundary(req)
+                                            pipe.prepare_next_chunk(req)
                             else:
                                 result = None
                             # finished should be computed after post_decode() advanced chunk_index
@@ -1403,6 +1411,7 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                                     finished=finished,
                                     result=result,
                                     streaming_media_duration=streaming_media_duration,
+                                    streaming_action_deadline=streaming_action_deadline,
                                 )
                             )
                             offset = offset + row_num
@@ -1488,10 +1497,18 @@ class DiffusionModelRunner(OmniConnectorModelRunnerMixin):
                 (str(modality), cast(InteractionPayload, payload)) for modality, payload in multi_modal_data.items()
             )
 
+        received_at = interaction.get("received_at", time.monotonic())
+        if (
+            isinstance(received_at, bool)
+            or not isinstance(received_at, (int, float))
+            or not math.isfinite(received_at)
+            or received_at < 0
+        ):
+            raise ValueError("interaction received_at must be finite and non-negative")
         self._interaction_coordinator.enqueue_parts(
             state,
             parts=parts,
             event_id=interaction["event_id"],
-            received_at=time.monotonic(),
+            received_at=float(received_at),
             transition_chunks=interaction.get("transition_chunks"),
         )

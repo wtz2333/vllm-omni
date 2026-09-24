@@ -242,17 +242,22 @@ async def test_playback_backpressure_bounds_generation_keeps_rpcs_live_and_clean
     engine.od_config.max_num_seqs = 1
     engine._streaming_playback = {}
     calls = []
+    action_deadline = 0.0
 
     def execute(output):
+        nonlocal action_deadline
         request_id = output.scheduled_request_ids[0]
         calls.append(request_id)
         chunk = calls.count(request_id)
+        if request_id == "paced" and chunk == 1:
+            action_deadline = time.monotonic() + 0.2
         return RunnerOutput(
             request_id=request_id,
             step_index=chunk,
             finished=chunk == 3,
             result=DiffusionOutput(chunk_index=chunk - 1, finished=chunk == 3),
             streaming_media_duration=1.0,
+            streaming_action_deadline=action_deadline if request_id == "paced" and chunk == 1 else 0.0,
         )
 
     engine.execute_fn = execute
@@ -275,9 +280,15 @@ async def test_playback_backpressure_bounds_generation_keeps_rpcs_live_and_clean
         await engine.async_collective_rpc("update_streaming_playback", args=("paced", 0.1))
         await asyncio.sleep(0.02)
         assert calls == ["paced"]
+        stamp = await engine.async_collective_rpc("track_streaming_interaction", args=("paced", "release"))
+        assert stamp < action_deadline
         await engine.async_collective_rpc("update_streaming_playback", args=("paced", 0.3))
+        await asyncio.sleep(0.02)
+        assert calls == ["paced"]
+        await engine.async_collective_rpc("submit_interaction", args=("paced", {"event_id": "release", "event": {}}))
         second = await asyncio.wait_for(queue.get(), 2)
         assert second.chunk_index == 1
+        assert time.monotonic() >= action_deadline
         assert calls == ["paced", "paced"]
         assert engine._playback_blocked()
         # Delayed/reordered progress cannot move the playhead backwards.

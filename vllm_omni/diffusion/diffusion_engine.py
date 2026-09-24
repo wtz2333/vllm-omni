@@ -218,6 +218,8 @@ class _StreamingPlayback:
     buffer_seconds: float
     generated_seconds: float = 0.0
     played_seconds: float = 0.0
+    action_deadline: float = 0.0
+    pending_actions: dict[str, float] = field(default_factory=dict)
 
 
 class DiffusionExecutionMode(str, Enum):
@@ -610,7 +612,13 @@ class DiffusionEngine:
                     and self.abort_queue.empty()
                     and not self.stop_event.is_set()
                 ):
-                    self._cv.wait(timeout=1.0)
+                    now = time.monotonic()
+                    deadlines = [
+                        state.action_deadline - now
+                        for state in (self._streaming_playback or {}).values()
+                        if state.action_deadline > now
+                    ]
+                    self._cv.wait(timeout=min(1.0, *deadlines) if deadlines else 1.0)
 
                 if self.stop_event.is_set():
                     break
@@ -629,6 +637,10 @@ class DiffusionEngine:
                 except Exception as exc:
                     self._fail_engine(exc)
                     return
+                for request_id in sched_output.scheduled_request_ids:
+                    playback = (self._streaming_playback or {}).get(request_id)
+                    if playback is not None:
+                        playback.action_deadline = 0.0
                 self._scheduler_num_waiting_reqs = max(int(sched_output.num_waiting_reqs), 0)
 
             self._emit_request_started_outputs(sched_output)
@@ -748,8 +760,29 @@ class DiffusionEngine:
         with self._cv:
             return any(
                 state.generated_seconds - state.played_seconds >= state.buffer_seconds
+                or (
+                    state.action_deadline > 0
+                    and (
+                        time.monotonic() < state.action_deadline
+                        or any(stamp < state.action_deadline for stamp in state.pending_actions.values())
+                    )
+                )
                 for state in (self._streaming_playback or {}).values()
             )
+
+    def track_streaming_interaction(self, request_id: str, event_id: str, pending: bool = True) -> float | None:
+        """Reserve a camera event before its worker RPC so feedback cannot pass it."""
+        with self._cv:
+            state = (self._streaming_playback or {}).get(request_id)
+            if state is None:
+                return None
+            if pending:
+                stamp = time.monotonic()
+                state.pending_actions[event_id] = stamp
+                return stamp
+            state.pending_actions.pop(event_id, None)
+            self._cv.notify_all()
+            return None
 
     def update_streaming_playback(self, request_id: str, position_seconds: float) -> None:
         if (
@@ -779,7 +812,13 @@ class DiffusionEngine:
             except queue.Empty:
                 return
 
-            self._run_rpc_task(task)
+            try:
+                self._run_rpc_task(task)
+            finally:
+                if task.method == "submit_interaction" and len(task.args) >= 2:
+                    interaction = task.args[1]
+                    if isinstance(interaction, dict) and isinstance(interaction.get("event_id"), str):
+                        self.track_streaming_interaction(task.args[0], interaction["event_id"], pending=False)
 
             if task.method == "pause_scheduler":
                 # A dequeued pause ends this drain whatever became of it, so
@@ -980,6 +1019,8 @@ class DiffusionEngine:
             playback = (self._streaming_playback or {}).get(request_id)
             if playback is not None and req_output is not None:
                 playback.generated_seconds += req_output.streaming_media_duration
+                if req_output.streaming_action_deadline > 0:
+                    playback.action_deadline = req_output.streaming_action_deadline
             if request_id in finished_ids:
                 # This entire request is finished (this is the last chunk)
                 out = self._finalize_finished_request(
@@ -1411,6 +1452,9 @@ class DiffusionEngine:
         with self._cv:
             # Feedback changes host-only state and must not wait behind a GPU
             # chunk, otherwise its RPC reply would hold up the control channel.
+            if method == "track_streaming_interaction":
+                task.future.set_result(self.track_streaming_interaction(*args, **(kwargs or {})))
+                return task
             if method == "update_streaming_playback":
                 self.update_streaming_playback(*args, **(kwargs or {}))
                 task.future.set_result(None)
@@ -1462,6 +1506,8 @@ class DiffusionEngine:
                 if not self._loop_started:
                     if method in ("pause_scheduler", "resume_scheduler"):
                         return self._run_engine_control(method, timeout, kwargs)
+                    if method == "track_streaming_interaction":
+                        return self.track_streaming_interaction(*args, **(kwargs or {}))
                     if method == "update_streaming_playback":
                         return self.update_streaming_playback(*args, **(kwargs or {}))
                     return self.executor.collective_rpc(

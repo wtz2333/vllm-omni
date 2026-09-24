@@ -576,7 +576,9 @@ def test_interactions_arriving_after_a_chunk_apply_before_next_chunk(monkeypatch
     runner._interaction_coordinator = mocker.Mock()
     runner._interaction_coordinator.maybe_prepare_initial_session.return_value = None
     monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
-    runner.execute_stepwise(_make_scheduler_output(_make_step_request(4)))
+    request = _make_step_request(4)
+    request.sampling_params.streaming_buffer_seconds = 1.25
+    runner.execute_stepwise(_make_scheduler_output(request))
     output = runner.execute_stepwise(_make_cached_scheduler_output()).get_request_output("req-1")
     assert output.result is not None and not output.finished
 

@@ -146,6 +146,7 @@ class OmniStreamingVideoOutputHandler:
                     send_lock,
                     progress,
                     interaction_payloads_by_id,
+                    request.streaming_buffer_seconds is not None,
                 )
             )
             async for chunk, metadata in self._stream_video_bytes(request, request_id, output_format, progress):
@@ -274,6 +275,7 @@ class OmniStreamingVideoOutputHandler:
         send_lock: asyncio.Lock,
         progress: _SessionProgress,
         interaction_payloads_by_id: dict[str, OmniInteractionPrompt],
+        track_playback: bool,
     ) -> None:
         while not stop_event.is_set():
             if progress.stalled_for(self._stall_timeout):
@@ -355,6 +357,7 @@ class OmniStreamingVideoOutputHandler:
                     request_id=request_id,
                     send_lock=send_lock,
                     interaction_payloads_by_id=interaction_payloads_by_id,
+                    track_playback=track_playback,
                 )
                 continue
             await self._send_error(websocket, f"Unknown message type: {msg_type}", send_lock=send_lock)
@@ -373,6 +376,7 @@ class OmniStreamingVideoOutputHandler:
         request_id: str,
         send_lock: asyncio.Lock,
         interaction_payloads_by_id: dict[str, OmniInteractionPrompt],
+        track_playback: bool = False,
     ) -> None:
         interaction = msg.get("interaction")
         if not isinstance(interaction, dict):
@@ -491,10 +495,12 @@ class OmniStreamingVideoOutputHandler:
         interaction_payloads_by_id[event_id] = normalized
 
         try:
-            await self._engine_client.submit_interaction_async(
-                request_id,
-                interaction=normalized,
-            )
+            if track_playback:
+                await self._engine_client.submit_interaction_async(
+                    request_id, interaction=normalized, track_playback=True
+                )
+            else:
+                await self._engine_client.submit_interaction_async(request_id, interaction=normalized)
         except Exception:
             logger.exception("Failed to apply interaction for request %s", request_id, exc_info=True)
             interaction_payloads_by_id.pop(event_id, None)

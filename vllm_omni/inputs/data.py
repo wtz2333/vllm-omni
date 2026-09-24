@@ -56,6 +56,7 @@ class OmniInteractionPrompt(TypedDict):
     event_id: str
     event: OmniInteractionEvent
     transition_chunks: NotRequired[int]
+    received_at: NotRequired[float]
 
 
 class OmniTokensPrompt(TokensPrompt):

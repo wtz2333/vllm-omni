@@ -149,6 +149,13 @@ def test_playback_feedback_reaches_engine_and_releases_next_chunk(mocker: Mocker
         start = ws.receive_json()
         assert start["type"] == "video.start"
         assert _receive_video_chunk(ws)[1] == b"first"
+        ws.send_json(
+            {
+                "type": "session.interaction",
+                "interaction": {"event_id": "move", "event": {"prompt": "new scene"}},
+            }
+        )
+        assert ws.receive_json()["type"] == "session.interaction.queued"
         ws.send_json({"type": "session.playback", "position_seconds": -1})
         assert ws.receive_json()["type"] == "error"
         engine.update_streaming_playback.assert_not_called()
@@ -156,6 +163,11 @@ def test_playback_feedback_reaches_engine_and_releases_next_chunk(mocker: Mocker
         assert _receive_video_chunk(ws)[1] == b"last"
         assert ws.receive_json()["type"] == "session.done"
     assert observed == [0.75]
+    engine.submit_interaction_async.assert_awaited_once_with(
+        start["request_id"],
+        interaction={"event_id": "move", "event": {"prompt": "new scene"}},
+        track_playback=True,
+    )
     engine.update_streaming_playback.assert_awaited_once_with(start["request_id"], 0.25)
 
 

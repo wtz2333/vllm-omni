@@ -80,6 +80,22 @@ async def test_submit_interaction_async_maps_external_to_internal_id() -> None:
 
 
 @pytest.mark.asyncio
+async def test_paced_interaction_reserves_action_time_before_enqueue(mocker) -> None:
+    omni = _make_async_omni()
+    omni.request_states.pop("external-abc-uuid-2")
+    rpc = mocker.patch.object(omni, "_engine_core_rpc", new=mocker.AsyncMock(return_value=[12.5]))
+
+    await omni.submit_interaction_async("external-abc", interaction=_prompt_interaction(), track_playback=True)
+
+    rpc.assert_awaited_once_with(
+        "track_streaming_interaction", stage_ids=[0], args=("external-abc-uuid-1", "ui-update-1")
+    )
+    omni.engine.submit_interaction_async.assert_awaited_once_with(  # pyright: ignore[reportAttributeAccessIssue]
+        "external-abc-uuid-1", interaction={**_prompt_interaction(), "received_at": 12.5}
+    )
+
+
+@pytest.mark.asyncio
 async def test_submit_interaction_async_passes_missing_transition_chunks() -> None:
     omni = _make_async_omni()
     omni.request_states.pop("external-abc-uuid-2")

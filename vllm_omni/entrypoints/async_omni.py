@@ -599,6 +599,7 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
         request_id: str,
         *,
         interaction: OmniInteractionPrompt,
+        track_playback: bool = False,
     ) -> None:
         """Apply a midway interaction to an active streaming diffusion request.
 
@@ -627,10 +628,27 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
                 f"interaction requires exactly one active request for {request_id!r}, found {len(internal_ids)}"
             )
 
-        await self.engine.submit_interaction_async(
-            internal_ids[0],
-            interaction=interaction,
-        )
+        internal_id = internal_ids[0]
+        received_at = None
+        if track_playback:
+            event_id = interaction["event_id"]
+            stamps = await self._engine_core_rpc(
+                "track_streaming_interaction", stage_ids=[0], args=(internal_id, event_id)
+            )
+            received_at = next((stamp for stamp in stamps if stamp is not None), None)
+            # The engine owns the action clock; clients cannot assign an earlier window.
+            interaction = {**interaction}
+            interaction.pop("received_at", None)
+            if received_at is not None:
+                interaction["received_at"] = received_at
+        try:
+            await self.engine.submit_interaction_async(internal_id, interaction=interaction)
+        except Exception:
+            if received_at is not None:
+                await self._engine_core_rpc(
+                    "track_streaming_interaction", stage_ids=[0], args=(internal_id, event_id, False)
+                )
+            raise
         if self.log_stats:
             logger.info("[AsyncOmni] Queued interaction for request %s", request_id)
 
