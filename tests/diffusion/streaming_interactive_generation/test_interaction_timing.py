@@ -112,6 +112,37 @@ def test_short_press_deferred_across_pause_preserves_its_duration(state):
     assert translations(state)[-1].item() == pytest.approx(0.015)
 
 
+@pytest.mark.parametrize("fresh_at", [10.05, 10.2])
+def test_deferred_and_fresh_short_presses_keep_both_intervals(state, fresh_at):
+    handler = SE3DeltaCameraHandler()
+    state.interaction_boundary = InteractionBoundaryContext(boundary_at=10, window_opened_at=0, window_end_at=1)
+    enqueue(handler, state, "deferred-press", 2)
+    enqueue(handler, state, "deferred-release", 2.1, z=0)
+    apply(handler, state)
+    enqueue(handler, state, "fresh-press", fresh_at)
+    enqueue(handler, state, "fresh-release", fresh_at + 0.1, z=0)
+    state.interaction_boundary = InteractionBoundaryContext(boundary_at=11, window_opened_at=10, window_end_at=11)
+    meta = apply(handler, state)
+    assert meta.started_event_ids == ["deferred-press", "deferred-release", "fresh-press", "fresh-release"]
+    assert translations(state)[-1].item() == pytest.approx(0.03)
+
+
+def test_overflow_preserves_the_fresh_press_for_following_window(state):
+    handler = SE3DeltaCameraHandler()
+    state.interaction_boundary = InteractionBoundaryContext(boundary_at=10, window_opened_at=0, window_end_at=1)
+    enqueue(handler, state, "deferred-press", 2)
+    enqueue(handler, state, "deferred-release", 3, z=0)
+    apply(handler, state)
+    enqueue(handler, state, "fresh-press", 10.2)
+    enqueue(handler, state, "fresh-release", 10.3, z=0)
+    state.interaction_boundary = InteractionBoundaryContext(boundary_at=11, window_opened_at=10, window_end_at=11)
+    assert apply(handler, state).started_event_ids == ["deferred-press"]
+    assert translations(state)[-1].item() == pytest.approx(0.15)
+    state.interaction_boundary = InteractionBoundaryContext(boundary_at=12, window_opened_at=11, window_end_at=12)
+    assert apply(handler, state).started_event_ids == ["deferred-release", "fresh-press", "fresh-release"]
+    assert translations(state)[-1].item() == pytest.approx(0.165)
+
+
 def test_late_target_applies_on_resume_and_supersedes_older_deferred_velocity(state):
     handler = SE3DeltaCameraHandler()
     state.interaction_boundary = InteractionBoundaryContext(boundary_at=10, window_opened_at=0, window_end_at=1)

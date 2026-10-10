@@ -85,6 +85,8 @@ class QueuedCameraEvent(InteractionEvent):
     pose: CameraPose = field(default_factory=CameraPose.identity)
     # Integer frame progress for ``target`` lerps (avoids float reciprocal drift).
     elapsed_transition_frames: float = 0.0
+    # Remaining media time for an eligible event that did not fit its window.
+    deferred_offset_s: float | None = None
 
 
 @dataclass
@@ -285,18 +287,40 @@ class SE3DeltaCameraHandler(InteractionHandler):
                 eligible.append(event)
 
         late_targets = [event for event in eligible if event.received_at >= window_end]
+        timed = [event for event in eligible if event.received_at < window_end]
+        slot_duration = (window_end - window_start) / num_latent_frames
+        # Backlog and fresh input use separate clocks within this media window.
+        # Preserve their intervals and carry overflow instead of collapsing it.
+        mapped: list[tuple[QueuedCameraEvent, float]] = []
+        backlog_shift: float | None = None
+        fresh_shift: float | None = None
+        last_mapped_at = window_start
+        for event in timed:
+            if event.deferred_offset_s is not None:
+                event_at = window_start + event.deferred_offset_s
+            elif event.received_at < window_start:
+                if backlog_shift is None:
+                    backlog_shift = last_mapped_at - event.received_at
+                event_at = event.received_at + backlog_shift
+            else:
+                if fresh_shift is None:
+                    fresh_shift = max(0.0, last_mapped_at - event.received_at)
+                event_at = event.received_at + fresh_shift
+            event_at = max(last_mapped_at, event_at)
+            last_mapped_at = event_at
+            if event_at >= window_end:
+                event.deferred_offset_s = event_at - window_end
+                future.append(event)
+            else:
+                event.deferred_offset_s = None
+                mapped.append((event, event_at))
         if late_targets:
-            # A later absolute target supersedes older, not-yet-applied controls;
-            # otherwise those controls would resurrect on the following chunk.
+            # An absolute target supersedes older, not-yet-applied controls so
+            # those controls cannot resurrect on the following chunk.
             last_target = late_targets[-1]
             coalesced.extend(event.event_id for event in future if event.received_at < last_target.received_at)
             future = [event for event in future if event.received_at >= last_target.received_at]
         session.pending_events = future
-        timed = [event for event in eligible if event.received_at < window_end]
-        slot_duration = (window_end - window_start) / num_latent_frames
-        # Preserve brief controls deferred across a playback gap. Shift their
-        # timeline together; cap it at one media window, not the wall wait.
-        offset = max(0.0, window_start - timed[0].received_at) if timed else 0.0
         started: list[str] = []
         completed: list[str] = []
         poses: list[CameraPose] = []
@@ -337,11 +361,8 @@ class SE3DeltaCameraHandler(InteractionHandler):
             slot_start = window_start + latent_idx * slot_duration
             slot_end = window_start + (latent_idx + 1) * slot_duration
             cursor = slot_start
-            while event_index < len(timed):
-                mapped_at = min(timed[event_index].received_at + offset, window_end)
-                if mapped_at > slot_end or (mapped_at == slot_end and latent_idx < num_latent_frames - 1):
-                    break
-                event = timed[event_index]
+            while event_index < len(mapped) and mapped[event_index][1] < slot_end:
+                event, mapped_at = mapped[event_index]
                 event_at = max(cursor, mapped_at)
                 advance(event_at - cursor)
                 activate(event)
