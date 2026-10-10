@@ -19,6 +19,7 @@ from typing_extensions import Self, override
 
 from vllm_omni.diffusion.interaction.modality_handlers.base import InteractionHandler
 from vllm_omni.diffusion.interaction.types import (
+    InteractionBoundaryContext,
     InteractionChunkMetadata,
     InteractionEvent,
     InteractionMode,
@@ -83,7 +84,7 @@ class QueuedCameraEvent(InteractionEvent):
     # Absolute pose for ``target``; per-frame SE3 delta for ``velocity``.
     pose: CameraPose = field(default_factory=CameraPose.identity)
     # Integer frame progress for ``target`` lerps (avoids float reciprocal drift).
-    elapsed_transition_frames: int = 0
+    elapsed_transition_frames: float = 0.0
 
 
 @dataclass
@@ -229,13 +230,23 @@ class SE3DeltaCameraHandler(InteractionHandler):
         session = state.interaction_sessions.setdefault("camera", CameraSession())
         assert isinstance(session, CameraSession)
         with session.lock:
-            poses, started, active, completed = self._step_one_chunk(
-                session,
-                num_media_frames=num_media_frames,
-                fps=fps,
-                num_latent_frames=num_latent_frames,
-                boundary_at=boundary_at,
-            )
+            context = state.interaction_boundary
+            coalesced: list[str] = []
+            if context is not None and context.window_opened_at is not None and context.window_end_at is not None:
+                poses, started, active, completed, coalesced = self._step_paced_chunk(
+                    session,
+                    context=context,
+                    num_latent_frames=num_latent_frames,
+                    control_step_seconds=num_media_frames / fps / num_latent_frames,
+                )
+            else:
+                poses, started, active, completed = self._step_one_chunk(
+                    session,
+                    num_media_frames=num_media_frames,
+                    fps=fps,
+                    num_latent_frames=num_latent_frames,
+                    boundary_at=boundary_at,
+                )
             if poses:
                 session.last_absolute_poses = torch.stack([p.as_matrix() for p in poses], dim=0)
             else:
@@ -245,7 +256,112 @@ class SE3DeltaCameraHandler(InteractionHandler):
             started_event_ids=started,
             active_event_ids=active,
             completed_event_ids=completed,
+            coalesced_event_ids=coalesced,
         )
+
+    def _step_paced_chunk(
+        self,
+        session: CameraSession,
+        *,
+        context: InteractionBoundaryContext,
+        num_latent_frames: int,
+        control_step_seconds: float,
+    ) -> tuple[list[CameraPose], list[str], list[str], list[str], list[str]]:
+        """Integrate all control types on one timeline, bounded by media time."""
+        window_start, window_end = context.window_opened_at, context.window_end_at
+        assert window_start is not None and window_end is not None
+        boundary_at = context.boundary_at
+        eligible: list[QueuedCameraEvent] = []
+        future: list[QueuedCameraEvent] = []
+        coalesced: list[str] = []
+        for event in sorted(session.pending_events, key=lambda item: item.received_at):
+            cutoff = boundary_at if event.mode == "target" else window_end
+            if event.received_at >= cutoff:
+                future.append(event)
+            elif event.mode == "target" and eligible and eligible[-1].mode == "target":
+                coalesced.append(eligible[-1].event_id)
+                eligible[-1] = event
+            else:
+                eligible.append(event)
+
+        late_targets = [event for event in eligible if event.received_at >= window_end]
+        if late_targets:
+            # A later absolute target supersedes older, not-yet-applied controls;
+            # otherwise those controls would resurrect on the following chunk.
+            last_target = late_targets[-1]
+            coalesced.extend(event.event_id for event in future if event.received_at < last_target.received_at)
+            future = [event for event in future if event.received_at >= last_target.received_at]
+        session.pending_events = future
+        timed = [event for event in eligible if event.received_at < window_end]
+        slot_duration = (window_end - window_start) / num_latent_frames
+        # Preserve brief controls deferred across a playback gap. Shift their
+        # timeline together; cap it at one media window, not the wall wait.
+        offset = max(0.0, window_start - timed[0].received_at) if timed else 0.0
+        started: list[str] = []
+        completed: list[str] = []
+        poses: list[CameraPose] = []
+        event_index = 0
+
+        def activate(event: QueuedCameraEvent) -> None:
+            cancelled = self._activate_event(session, event)
+            if cancelled is not None:
+                completed.append(cancelled)
+            started.append(event.event_id)
+            if event.mode == "target" and event.transition_chunks == 0:
+                completed.append(self._clear_active_target(session))
+
+        def advance(duration: float) -> None:
+            event = session.active_event
+            if event is None or duration <= 0:
+                return
+            if event.mode == "velocity":
+                fraction = duration / control_step_seconds
+                whole_steps = int(fraction)
+                for _ in range(whole_steps):
+                    session.current_pose = _compose_pose(session.current_pose, event.pose)
+                remainder = fraction - whole_steps
+                if remainder > 0:
+                    session.current_pose = _compose_pose(
+                        session.current_pose, _lerp_pose(CameraPose.identity(), event.pose, remainder)
+                    )
+            else:
+                event.elapsed_transition_frames += duration / slot_duration
+                event.elapsed_transition_chunks = event.elapsed_transition_frames / num_latent_frames
+                source = session.target_source or session.current_pose
+                alpha = min(1.0, event.elapsed_transition_chunks / event.transition_chunks)
+                session.current_pose = _lerp_pose(source, event.pose, alpha)
+                if math.isclose(alpha, 1.0, rel_tol=1e-12):
+                    completed.append(self._clear_active_target(session))
+
+        for latent_idx in range(num_latent_frames):
+            slot_start = window_start + latent_idx * slot_duration
+            slot_end = window_start + (latent_idx + 1) * slot_duration
+            cursor = slot_start
+            while event_index < len(timed):
+                mapped_at = min(timed[event_index].received_at + offset, window_end)
+                if mapped_at > slot_end or (mapped_at == slot_end and latent_idx < num_latent_frames - 1):
+                    break
+                event = timed[event_index]
+                event_at = max(cursor, mapped_at)
+                advance(event_at - cursor)
+                activate(event)
+                cursor = event_at
+                event_index += 1
+            advance(slot_end - cursor)
+            poses.append(session.current_pose.clone())
+
+        # Late targets become visible in this chunk's last control sample;
+        # the extra wall-clock wait never advances a held velocity.
+        for event in late_targets:
+            activate(event)
+            if session.active_event is not None:
+                just_completed = self._step_one_frame(session, num_latent_frames)
+                if just_completed is not None:
+                    completed.append(just_completed)
+            poses[-1] = session.current_pose.clone()
+        session.last_boundary_at = boundary_at
+        active = [session.active_event.event_id] if session.active_event is not None else []
+        return poses, started, active, list(dict.fromkeys(completed)), coalesced
 
     def _step_one_chunk(
         self,

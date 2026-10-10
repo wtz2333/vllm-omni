@@ -637,7 +637,8 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
         request_id: str,
         *,
         interaction: OmniInteractionPrompt,
-    ) -> None:
+        track_playback: bool = False,
+    ) -> float | None:
         """Apply a midway interaction to an active streaming diffusion request.
 
         ``request_id`` is the external id created by the server-side session,
@@ -665,12 +666,29 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
                 f"interaction requires exactly one active request for {request_id!r}, found {len(internal_ids)}"
             )
 
-        await self.engine.submit_interaction_async(
-            internal_ids[0],
-            interaction=interaction,
-        )
+        internal_id = internal_ids[0]
+        received_at = None
+        event_id = interaction["event_id"] if track_playback else ""
+        try:
+            if track_playback:
+                stamps = await self._engine_core_rpc(
+                    "track_streaming_interaction", stage_ids=[0], args=(internal_id, event_id)
+                )
+                received_at = next((stamp for stamp in stamps if stamp is not None), None)
+                interaction = {**interaction}
+                interaction.pop("received_at", None)
+                if received_at is not None:
+                    interaction["received_at"] = received_at
+            await self.engine.submit_interaction_async(internal_id, interaction=interaction)
+        except BaseException:
+            if track_playback:
+                await self._engine_core_rpc(
+                    "track_streaming_interaction", stage_ids=[0], args=(internal_id, event_id, False)
+                )
+            raise
         if self.log_stats:
             logger.info("[AsyncOmni] Queued interaction for request %s", request_id)
+        return received_at
 
     def _split_stage_ids_by_type(self, stage_ids: list[int] | None = None) -> tuple[list[int], list[int]]:
         """Split stage ids into AR/LLM (EngineCore) vs diffusion (worker RPC)."""

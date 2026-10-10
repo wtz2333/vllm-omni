@@ -242,10 +242,13 @@ async def test_playback_backpressure_bounds_generation_keeps_rpcs_live_and_clean
     engine.od_config.max_num_seqs = 1
     engine._streaming_playback = {}
     calls = []
+    boundaries = []
 
     def execute(output):
         request_id = output.scheduled_request_ids[0]
         calls.append(request_id)
+        if request_id == "paced":
+            boundaries.append(output.interaction_boundaries[request_id])
         chunk = calls.count(request_id)
         return RunnerOutput(
             request_id=request_id,
@@ -275,10 +278,19 @@ async def test_playback_backpressure_bounds_generation_keeps_rpcs_live_and_clean
         await engine.async_collective_rpc("update_streaming_playback", args=("paced", 0.1))
         await asyncio.sleep(0.02)
         assert calls == ["paced"]
+        stamp = await engine.async_collective_rpc("track_streaming_interaction", args=("paced", "release"))
         await engine.async_collective_rpc("update_streaming_playback", args=("paced", 0.3))
+        await asyncio.sleep(0.02)
+        assert calls == ["paced"]
+        assert stamp < engine._streaming_playback["paced"].next_ready_at
+        await engine.async_collective_rpc("submit_interaction", args=("paced", {"event_id": "release", "event": {}}))
         second = await asyncio.wait_for(queue.get(), 2)
         assert second.chunk_index == 1
         assert calls == ["paced", "paced"]
+        assert boundaries[0].window_end_at is None
+        assert boundaries[1].window_opened_at == boundaries[0].boundary_at
+        assert boundaries[1].window_end_at == pytest.approx(boundaries[0].boundary_at + 1.0)
+        assert boundaries[1].boundary_at >= boundaries[1].window_end_at
         assert engine._playback_blocked()
         # Delayed/reordered progress cannot move the playhead backwards.
         await engine.async_collective_rpc("update_streaming_playback", args=("paced", 0.2))

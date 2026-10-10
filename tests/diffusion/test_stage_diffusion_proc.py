@@ -322,6 +322,17 @@ async def test_proc_rpc_wait_allows_playback_and_abort_in_order(proc_control_loo
             "result": None,
         }
         proc._engine.update_streaming_playback.assert_called_once_with("video", 0.5)
+        proc._engine.track_streaming_interaction.return_value = 12.0
+        submit(
+            {
+                "type": "collective_rpc",
+                "rpc_id": "reserve",
+                "method": "track_streaming_interaction",
+                "args": ["video", "key"],
+            }
+        )
+        assert await asyncio.wait_for(outgoing.get(), 1) == {"type": "rpc_result", "rpc_id": "reserve", "result": 12.0}
+        proc._engine.track_streaming_interaction.assert_called_once_with("video", "key")
         submit({"type": "abort", "request_ids": ["video"]})
         await asyncio.wait_for(aborted.wait(), 1)
         proc._engine.abort.assert_called_once_with("video")
