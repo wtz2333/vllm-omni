@@ -127,6 +127,16 @@ _DIFFUSION_MODEL_METADATA: dict[str, DiffusionModelMetadata] = {
     "LTX2I2VDMD2Pipeline": DiffusionModelMetadata(final_output_type="video"),
     "HeliosPipeline": DiffusionModelMetadata(final_output_type="video"),
     "HeliosPyramidPipeline": DiffusionModelMetadata(final_output_type="video"),
+    "EvokePipeline": DiffusionModelMetadata(
+        supports_multimodal_inputs=True,
+        max_multimodal_image_inputs=1,
+        final_output_type="video",
+    ),
+    "EvokeTurboPipeline": DiffusionModelMetadata(
+        supports_multimodal_inputs=True,
+        max_multimodal_image_inputs=1,
+        final_output_type="video",
+    ),
     "HunyuanVideo15Pipeline": DiffusionModelMetadata(final_output_type="video"),
     "HunyuanVideo15ImageToVideoPipeline": DiffusionModelMetadata(final_output_type="video"),
     "LingBotVideoPipeline": DiffusionModelMetadata(final_output_type="video"),

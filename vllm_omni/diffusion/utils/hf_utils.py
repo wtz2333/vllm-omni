@@ -23,6 +23,56 @@ _MAGI2_REQUIRED_FILES = (
     "turbo_vae/checkpoint.ckpt",
 )
 
+_EVOKE_MODEL_ID = "AlayaLab/Evoke"
+_EVOKE_TURBO_MODEL_ID = "AlayaLab/Evoke-Turbo"
+
+
+def _normalize_model_id(model_name: str) -> str:
+    normalized = str(model_name).strip().rstrip("/")
+    if normalized.lower().startswith("https://huggingface.co/"):
+        normalized = normalized[len("https://huggingface.co/") :]
+        normalized = normalized.split("/tree/", 1)[0]
+    return normalized
+
+
+def _looks_like_evoke(model_name: str) -> bool:
+    normalized = _normalize_model_id(model_name)
+    if normalized.lower() in {_EVOKE_MODEL_ID.lower(), _EVOKE_TURBO_MODEL_ID.lower()}:
+        return True
+    if not os.path.isdir(normalized):
+        return False
+    root = os.path.abspath(normalized)
+    return (
+        "evoke" in os.path.basename(root).lower()
+        or os.path.isfile(os.path.join(root, "evoke-base", "vae", "config.json"))
+    ) and any(
+        os.path.isfile(os.path.join(root, relative))
+        for relative in (
+            "config.json",
+            "transformer/config.json",
+            "evoke/stage3_post_distillation/transformer/config.json",
+            "evoke-turbo/transformer/config.json",
+        )
+    )
+
+
+def get_evoke_transformer_config(model_name: str) -> dict | None:
+    normalized = _normalize_model_id(model_name)
+    if normalized.lower() == _EVOKE_TURBO_MODEL_ID.lower():
+        return get_hf_file_to_dict("config.json", normalized)
+    if normalized.lower() == _EVOKE_MODEL_ID.lower():
+        return get_hf_file_to_dict("evoke/stage3_post_distillation/transformer/config.json", normalized)
+    for relative in (
+        "evoke/stage3_post_distillation/transformer/config.json",
+        "evoke-turbo/transformer/config.json",
+        "transformer/config.json",
+        "config.json",
+    ):
+        cfg = get_hf_file_to_dict(relative, normalized)
+        if isinstance(cfg, Mapping) and cfg.get("_class_name") == "EvokeTransformer3DModel":
+            return dict(cfg)
+    return None
+
 
 def get_diffusion_model_index(
     model_name: str,
