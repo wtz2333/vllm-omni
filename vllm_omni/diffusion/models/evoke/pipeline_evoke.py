@@ -233,6 +233,18 @@ class EvokePipeline(HeliosPipeline):
             )
             if key in scheduler_config
         }
+        # The checkpoint ships a stage-1 scheduler (stages=1, dynamic
+        # shifting enabled). Evoke's released post-distilled/Turbo recipe uses
+        # a three-level pyramid and applies the per-stage shift in the rollout;
+        # construct the pyramid scheduler exactly as the official inference
+        # script does to avoid missing ``ori_start_sigmas[1/2]`` and double
+        # time-shifting.
+        scheduler_kwargs.update(
+            stages=3,
+            stage_range=[0.0, 1 / 3, 2 / 3, 1.0],
+            shift=1.0,
+            use_dynamic_shifting=False,
+        )
         self.scheduler = HeliosScheduler(**scheduler_kwargs)
         self.is_distilled = scheduler_kwargs.get("scheduler_type") == "dmd"
         self.vae_scale_factor_temporal = self.vae.config.scale_factor_temporal
