@@ -243,10 +243,11 @@ class EvokePipeline(HeliosPipeline):
             stages=3,
             stage_range=[0.0, 1 / 3, 2 / 3, 1.0],
             shift=1.0,
+            scheduler_type="dmd",
             use_dynamic_shifting=False,
         )
         self.scheduler = HeliosScheduler(**scheduler_kwargs)
-        self.is_distilled = scheduler_kwargs.get("scheduler_type") == "dmd"
+        self.is_distilled = True
         self.vae_scale_factor_temporal = self.vae.config.scale_factor_temporal
         self.vae_scale_factor_spatial = self.vae.config.scale_factor_spatial
         self._guidance_scale = None
@@ -269,6 +270,7 @@ class EvokePipeline(HeliosPipeline):
         kwargs.setdefault("is_enable_stage2", True)
         kwargs.setdefault("pyramid_num_stages", 3)
         kwargs.setdefault("pyramid_num_inference_steps_list", [1, 1, 1])
+        kwargs.setdefault("is_amplify_first_chunk", True)
         kwargs.setdefault("history_sizes", [16, 2, 1])
         kwargs.setdefault("num_latent_frames_per_chunk", 9)
         if sampling.max_sequence_length is None:
