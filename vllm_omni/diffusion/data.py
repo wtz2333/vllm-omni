@@ -734,10 +734,16 @@ def resolve_model_class_name(
     """
     from vllm.transformers_utils.config import get_hf_file_to_dict
 
-    from vllm_omni.diffusion.utils.hf_utils import get_diffusion_model_index, resolve_native_diffusion_model_class
+    from vllm_omni.diffusion.utils.hf_utils import (
+        _looks_like_evoke,
+        get_diffusion_model_index,
+        resolve_native_diffusion_model_class,
+    )
 
     if not model:
         return None
+    if _looks_like_evoke(model):
+        return "EvokeTurboPipeline" if "turbo" in str(model).lower() else "EvokePipeline"
     native_model_class = resolve_native_diffusion_model_class(model)
     if native_model_class is not None:
         return native_model_class
@@ -1599,11 +1605,24 @@ class OmniDiffusionConfig:
 
         from vllm_omni.diffusion.registry import resolve_native_single_file
         from vllm_omni.diffusion.utils.hf_utils import (
+            _looks_like_evoke,
             get_diffusion_model_index,
+            get_evoke_transformer_config,
             resolve_native_diffusion_model_class,
         )
 
         assert self.model is not None
+
+        # Evoke publishes a metadata-only root index. The shared base and the
+        # actual transformer live in nested directories (Turbo ships only the
+        # root transformer), so resolve this layout before generic Diffusers
+        # discovery can select DiffusersAdapterPipeline.
+        if _looks_like_evoke(self.model):
+            self.model_class_name = "EvokeTurboPipeline" if "turbo" in str(self.model).lower() else "EvokePipeline"
+            evoke_config = get_evoke_transformer_config(self.model)
+            self.set_tf_model_config(TransformerConfig.from_dict(evoke_config or {}))
+            self.update_multimodal_support()
+            return
 
         native_single_file_model = resolve_native_single_file(self.model_class_name)
         if self.is_single_file and native_single_file_model is not None:

@@ -24,6 +24,7 @@ from vllm_omni.model_extras.cosmos3 import (
     COSMOS3_EXTRA_BODY_PARAMS,
     COSMOS3_EXTRA_OUTPUT_PARAMS,
 )
+from vllm_omni.model_extras.evoke import EVOKE_EXTRA_BODY_PARAMS, EVOKE_EXTRA_OUTPUT_PARAMS
 from vllm_omni.model_extras.helios import (
     HELIOS_EXTRA_BODY_PARAMS,
     HELIOS_EXTRA_OUTPUT_PARAMS,
@@ -262,6 +263,14 @@ _EXTRA_SPECS: dict[str, dict[str, Any]] = {
     "HeliosPyramidPipeline": {
         "extra_body_params": HELIOS_EXTRA_BODY_PARAMS,
         "extra_output_params": HELIOS_EXTRA_OUTPUT_PARAMS,
+    },
+    "EvokePipeline": {
+        "extra_body_params": EVOKE_EXTRA_BODY_PARAMS,
+        "extra_output_params": EVOKE_EXTRA_OUTPUT_PARAMS,
+    },
+    "EvokeTurboPipeline": {
+        "extra_body_params": EVOKE_EXTRA_BODY_PARAMS,
+        "extra_output_params": EVOKE_EXTRA_OUTPUT_PARAMS,
     },
     "LingBotVideoPipeline": {
         "extra_body_params": LINGBOT_VIDEO_EXTRA_BODY_PARAMS,
