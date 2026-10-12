@@ -293,7 +293,8 @@ class StageConfigFactory:
         if user_deploy_config is None:
             user_deploy_config = cls._load_user_deploy_config(deploy_config_path)
         if Path(model).is_file() and user_deploy_config is not None:
-            pipeline = OMNI_PIPELINES.get(user_deploy_config.pipeline)
+            pipeline_key = user_deploy_config.pipeline
+            pipeline = OMNI_PIPELINES.get(pipeline_key) if pipeline_key is not None else None
             if (
                 isinstance(pipeline, PipelineConfig)
                 and get_diffusion_model_metadata(pipeline.model_arch).supports_single_file_checkpoint

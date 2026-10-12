@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Echo-WM text conditioning stack: Gemma feature extraction + connectors.
 
 Port of the reference ``EmbeddingsProcessor``: the 49 stacked Gemma hidden

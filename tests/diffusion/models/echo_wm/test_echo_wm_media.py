@@ -40,6 +40,10 @@ def test_camera_matches_reference_actions(monkeypatch):
     if not reference_path.exists():
         pytest.skip("Set ECHOWM_REFERENCE_ROOT for optional upstream camera parity")
     spec = importlib.util.spec_from_file_location("echo_wm_reference_camera", reference_path)
+    if spec is None:
+        raise ImportError(f"Could not load reference camera module from {reference_path}")
+    if spec.loader is None:
+        raise ImportError(f"Reference camera module has no loader: {reference_path}")
     reference = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(reference)
     params = dict(
@@ -114,9 +118,9 @@ def test_decoder_uses_reference_video_memory_layout(monkeypatch):
         observed["audio"] = latent
         return SimpleNamespace(waveform=torch.zeros(2, 48000), sampling_rate=48000)
 
-    video_module.decode_video = decode_video
-    video_module.TilingConfig = SimpleNamespace(default=lambda: None)
-    audio_module.decode_audio = decode_audio
+    video_module.decode_video = decode_video  # type: ignore[attr-defined]
+    video_module.TilingConfig = SimpleNamespace(default=lambda: None)  # type: ignore[attr-defined]
+    audio_module.decode_audio = decode_audio  # type: ignore[attr-defined]
     monkeypatch.setitem(sys.modules, "ltx_core.model.video_vae", video_module)
     monkeypatch.setitem(sys.modules, "ltx_core.model.audio_vae", audio_module)
     adapter = EchoWMMediaAdapter("unused.safetensors", device=torch.device("cpu"))

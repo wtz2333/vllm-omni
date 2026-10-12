@@ -104,7 +104,7 @@ sample rate in `audio_sample_rate`. The example reuses
 ## Parameters and support
 
 | Parameter | Default | Contract |
-|-----------|---------|----------|
+| ----------- | --------- | ---------- |
 | Height × width | 704 × 1280 | Positive multiples of 32; initialize the model and request at the same size |
 | `--num-frames` | 169 | `1 + 24*n`, including the first frame |
 | `--fps` | 24 | Camera trajectory and output playback rate |
@@ -134,7 +134,6 @@ configuration. Ring, CFG parallelism, pipeline parallelism, HSDP, quantization,
 cache acceleration, and VAE parallelism are unsupported. Each request accepts
 one image and one prompt. The step-execution adapter supports a fixed action
 trajectory, not live camera updates or request batching.
-
 
 Decoded stepwise output currently decodes the complete committed prefix for
 each chunk, reloads the media components, and emits only the new frames and

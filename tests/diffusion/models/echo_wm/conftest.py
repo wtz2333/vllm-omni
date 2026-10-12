@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """CPU-only process groups and kernels for Echo-WM contract tests."""
 
 from contextlib import contextmanager
@@ -52,7 +52,7 @@ def cpu_kernels(*, sp_size: int = 1):
     with pytest.MonkeyPatch.context() as patch, set_current_diffusion_config(config):
         patch.setattr(
             "vllm.model_executor.layers.linear.dispatch_unquantized_gemm",
-            lambda: default_unquantized_gemm,
+            lambda *_args, **_kwargs: default_unquantized_gemm,
         )
         # A CUDA build probes device capability before honoring TORCH_SDPA.
         # Select the real CPU-capable kernel directly; attention math is real.

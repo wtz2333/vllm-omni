@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Echo-WM transformer tests.
 
 Layout, sigma and weight-mapping contracts always run. Forward-parity tests
@@ -648,7 +648,7 @@ def _sp_forward_case(model):
     video, audio = torch.randn(1, 3 * ppf, 16), torch.randn(1, 25, 16)
     outputs = []
     with torch.inference_mode():
-        for vx, ax, vs, aas, vf, at in (
+        for vx, ax, vs, audio_sigma, vf, at in (
             (image, None, 0.0, 0.0, 0, 0),
             (image, prefix, 0.0, 0.9, 0, 0),
             (video, audio, 0.9, 0.9, 1, 2),
@@ -659,7 +659,7 @@ def _sp_forward_case(model):
                     video_tokens=vx,
                     audio_tokens=ax,
                     video_sigma=vs,
-                    audio_sigma=aas,
+                    audio_sigma=audio_sigma,
                     video_context=video_context,
                     audio_context=audio_context,
                     caches=caches,

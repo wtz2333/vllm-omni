@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Generate an Echo-WM Flash video with audio from an image and camera actions."""
 
 from __future__ import annotations
@@ -164,20 +164,10 @@ def main() -> None:
         enforce_eager=True,
     )
     try:
-        import torch
-
-        measure_memory = (
-            args.tensor_parallel_size == 1
-            and args.ulysses_degree == 1
-            and torch.cuda.is_initialized()
-            and torch.cuda.memory_allocated() > 0
-        )
-        if measure_memory:
-            torch.accelerator.reset_peak_memory_stats()
         start = time.perf_counter()
         outputs = omni.generate(prompt, sampling_params)
         generation_seconds = time.perf_counter() - start
-        peak_allocated_gib = torch.accelerator.max_memory_allocated() / 2**30 if measure_memory else None
+        peak_allocated_gib = None
         if len(outputs) != 1:
             raise ValueError(f"Expected one generated result, received {len(outputs)}")
         media = save_output(outputs[0], args.output, fps=args.fps)

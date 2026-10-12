@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Echo-WM audio-video world-model transformer.
 
 Port of the Echo-WM reference ``LTXModel`` (an LTX-2.3 audio-video DiT with a

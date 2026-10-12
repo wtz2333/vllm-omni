@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 from vllm_omni.diffusion.models.echo_wm.causal_cache import (
     AUDIO_FRAMES_PER_VIDEO_BLOCK,

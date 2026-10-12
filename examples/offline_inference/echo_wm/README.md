@@ -102,7 +102,6 @@ The example requests one complete output. It does not expose live camera
 updates during generation. Ring, CFG parallelism, pipeline parallelism,
 quantization, and cache acceleration are not supported by this integration.
 
-
 Decoded stepwise output currently decodes the complete committed prefix for
 each chunk, reloads the media components, and emits only the new frames and
 audio samples. It does not keep persistent codec state or provide constant

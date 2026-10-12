@@ -1,5 +1,5 @@
 # SPDX-License-Identifier: Apache-2.0
-# SPDX-FileCopyrightText: Copyright contributors to the vLLM project
+# SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 """Echo-WM text-stack parity tests against the reference ``EmbeddingsProcessor``.
 
 Reference parity skips when the upstream checkout is absent. The CPU Gloo
