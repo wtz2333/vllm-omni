@@ -22,6 +22,7 @@ logger = init_logger(__name__)
 
 _NATIVE_SINGLE_FILE_MODELS = {
     "AnimaPipeline": ("AnimaModularPipeline",),
+    "EchoWMCausalPipeline": (),
 }
 
 
@@ -185,6 +186,11 @@ _DIFFUSION_MODELS = {
         "lingbot_world",
         "pipeline",
         "LingBotWorldCausalDMDPipeline",
+    ),
+    "EchoWMCausalPipeline": (
+        "echo_wm",
+        "pipeline",
+        "EchoWMCausalPipeline",
     ),
     "LongCatImagePipeline": (
         "longcat_image",
@@ -445,6 +451,7 @@ _NO_CACHE_ACCELERATION = {
     # branch) across denoising steps, which conflicts with cache_dit / tea_cache
     # step-skipping hooks.
     "QwenImage21Pipeline",
+    "EchoWMCausalPipeline",
 }
 
 

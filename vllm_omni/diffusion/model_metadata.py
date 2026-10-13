@@ -21,6 +21,8 @@ class DiffusionModelMetadata:
     # noise masks for latent initialization. Unknown pipelines must remain
     # opted out so uploaded files never reach a model that cannot consume them.
     supports_latent_mask_editing: bool = False
+    # The pipeline owns embedded metadata and weight loading for native files.
+    supports_single_file_checkpoint: bool = False
 
 
 # FLUX.2 Klein supports up to four reference images.
@@ -130,6 +132,12 @@ _DIFFUSION_MODEL_METADATA: dict[str, DiffusionModelMetadata] = {
     "HunyuanVideo15Pipeline": DiffusionModelMetadata(final_output_type="video"),
     "HunyuanVideo15ImageToVideoPipeline": DiffusionModelMetadata(final_output_type="video"),
     "LingBotVideoPipeline": DiffusionModelMetadata(final_output_type="video"),
+    "EchoWMCausalPipeline": DiffusionModelMetadata(
+        supports_single_file_checkpoint=True,
+        supports_multimodal_inputs=True,
+        max_multimodal_image_inputs=1,
+        final_output_type="video",
+    ),
     "LongCatVideoAvatarPipeline": DiffusionModelMetadata(final_output_type="video"),
     "MagiHumanPipeline": DiffusionModelMetadata(final_output_type="video"),
     "DreamIDOmniPipeline": DiffusionModelMetadata(final_output_type="video"),

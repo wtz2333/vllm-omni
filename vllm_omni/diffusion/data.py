@@ -736,7 +736,9 @@ def resolve_model_class_name(
 
     from vllm_omni.diffusion.utils.hf_utils import get_diffusion_model_index, resolve_native_diffusion_model_class
 
-    if not model:
+    if not model or os.path.isfile(model):
+        # Native checkpoint files need an explicit architecture; they are not
+        # Hugging Face repositories and must not be probed as repo IDs.
         return None
     native_model_class = resolve_native_diffusion_model_class(model)
     if native_model_class is not None:
@@ -1606,11 +1608,19 @@ class OmniDiffusionConfig:
         assert self.model is not None
 
         native_single_file_model = resolve_native_single_file(self.model_class_name)
-        if self.is_single_file and native_single_file_model is not None:
+        if self.is_single_file:
+            if native_single_file_model is None or self.diffusion_load_format == "diffusers":
+                raise ValueError(
+                    "Local checkpoint files require an explicit model_class_name that supports "
+                    "native single-file loading with the default diffusion backend; "
+                    f"got model_class_name={self.model_class_name!r}, "
+                    f"diffusion_load_format={self.diffusion_load_format!r}"
+                )
             self.diffusion_load_format = "default"
             self.model_class_name = native_single_file_model
             self.diffusers_pipeline_cls = None
             self.set_tf_model_config(TransformerConfig())
+            self.update_multimodal_support()
             return
 
         try:
