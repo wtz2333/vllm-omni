@@ -36,6 +36,7 @@ import math
 import time
 import uuid
 from collections.abc import AsyncGenerator
+from dataclasses import dataclass
 from http import HTTPStatus
 from typing import Any, cast
 
@@ -75,6 +76,7 @@ _DEFAULT_START_TIMEOUT = 10.0
 _CONTROL_POLL_INTERVAL = 1.0
 _MAX_START_MESSAGE_SIZE = 4 * 1024 * 1024
 _MAX_CONTROL_MESSAGE_SIZE = 128 * 1024
+_MAX_INTERACTION_QUEUE_SIZE = 64
 
 
 class _SessionProgress:
@@ -88,6 +90,12 @@ class _SessionProgress:
 
     def stalled_for(self, stall_timeout: float) -> bool:
         return time.monotonic() - self._last_at > stall_timeout
+
+
+@dataclass(frozen=True)
+class _QueuedInteraction:
+    event_id: str
+    payload: OmniInteractionPrompt
 
 
 class OmniStreamingVideoOutputHandler:
@@ -114,10 +122,13 @@ class OmniStreamingVideoOutputHandler:
         stop_event = asyncio.Event()
         send_lock = asyncio.Lock()
         control_task: asyncio.Task[None] | None = None
+        interaction_delivery_task: asyncio.Task[None] | None = None
+        interaction_queue: asyncio.Queue[_QueuedInteraction] = asyncio.Queue(maxsize=_MAX_INTERACTION_QUEUE_SIZE)
         stopped = False
         chunks_sent = 0
         generation_done = False
         interaction_payloads_by_id: dict[str, OmniInteractionPrompt] = {}
+        request: VideoGenerationRequest | None = None
 
         try:
             start = await self._receive_start(websocket)
@@ -138,6 +149,17 @@ class OmniStreamingVideoOutputHandler:
                 )
             progress.touch()
 
+            interaction_delivery_task = asyncio.create_task(
+                self._interaction_delivery_loop(
+                    interaction_queue,
+                    websocket=websocket,
+                    request_id=request_id,
+                    send_lock=send_lock,
+                    progress=progress,
+                    interaction_payloads_by_id=interaction_payloads_by_id,
+                    track_playback=request.streaming_buffer_seconds is not None,
+                )
+            )
             control_task = asyncio.create_task(
                 self._control_loop(
                     websocket,
@@ -146,6 +168,7 @@ class OmniStreamingVideoOutputHandler:
                     send_lock,
                     progress,
                     interaction_payloads_by_id,
+                    interaction_queue,
                     request.streaming_buffer_seconds is not None,
                 )
             )
@@ -160,6 +183,8 @@ class OmniStreamingVideoOutputHandler:
                 chunks_sent += 1
                 progress.touch()
 
+            if not stop_event.is_set():
+                await interaction_queue.join()
             generation_done = True
             async with send_lock:
                 await websocket.send_json(
@@ -192,9 +217,19 @@ class OmniStreamingVideoOutputHandler:
             logger.exception("Streaming video output session error: %s", e)
             await self._send_error(websocket, str(e))
         finally:
+            stop_event.set()
             if control_task is not None:
                 control_task.cancel()
                 await asyncio.gather(control_task, return_exceptions=True)
+            if interaction_delivery_task is not None:
+                interaction_delivery_task.cancel()
+                await asyncio.gather(interaction_delivery_task, return_exceptions=True)
+                await self._release_queued_interactions(
+                    interaction_queue,
+                    request_id=request_id,
+                    track_playback=request is not None and request.streaming_buffer_seconds is not None,
+                    interaction_payloads_by_id=interaction_payloads_by_id,
+                )
             if request_id is not None and not generation_done:
                 await self._abort_request(request_id)
 
@@ -275,6 +310,7 @@ class OmniStreamingVideoOutputHandler:
         send_lock: asyncio.Lock,
         progress: _SessionProgress,
         interaction_payloads_by_id: dict[str, OmniInteractionPrompt],
+        interaction_queue: asyncio.Queue[_QueuedInteraction],
         track_playback: bool = False,
     ) -> None:
         while not stop_event.is_set():
@@ -357,10 +393,84 @@ class OmniStreamingVideoOutputHandler:
                     request_id=request_id,
                     send_lock=send_lock,
                     interaction_payloads_by_id=interaction_payloads_by_id,
+                    interaction_queue=interaction_queue,
+                    stop_event=stop_event,
+                    progress=progress,
                     track_playback=track_playback,
                 )
                 continue
             await self._send_error(websocket, f"Unknown message type: {msg_type}", send_lock=send_lock)
+
+    async def _interaction_delivery_loop(
+        self,
+        interaction_queue: asyncio.Queue[_QueuedInteraction],
+        *,
+        websocket: WebSocket,
+        request_id: str,
+        send_lock: asyncio.Lock,
+        progress: _SessionProgress,
+        interaction_payloads_by_id: dict[str, OmniInteractionPrompt],
+        track_playback: bool,
+    ) -> None:
+        """Deliver accepted interactions in ingress order without blocking the reader."""
+        while True:
+            queued = await interaction_queue.get()
+            try:
+                try:
+                    if track_playback:
+                        await self._engine_client.submit_interaction_async(
+                            request_id,
+                            interaction=queued.payload,
+                            track_playback=True,
+                        )
+                    else:
+                        await self._engine_client.submit_interaction_async(
+                            request_id,
+                            interaction=queued.payload,
+                        )
+                    progress.touch()
+                except asyncio.CancelledError:
+                    await self._release_interaction_reservation(request_id, queued.event_id, track_playback)
+                    raise
+                except Exception:
+                    logger.exception("Failed to apply interaction for request %s", request_id, exc_info=True)
+                    interaction_payloads_by_id.pop(queued.event_id, None)
+                    await self._release_interaction_reservation(request_id, queued.event_id, track_playback)
+                    await self._send_error(
+                        websocket,
+                        "Failed to apply interaction",
+                        code="interaction_failed",
+                        request_id=request_id,
+                        event_id=queued.event_id,
+                        send_lock=send_lock,
+                    )
+            finally:
+                interaction_queue.task_done()
+
+    async def _release_interaction_reservation(self, request_id: str, event_id: str, track_playback: bool) -> None:
+        if not track_playback:
+            return
+        try:
+            await self._engine_client.release_streaming_interaction(request_id, event_id)
+        except Exception:
+            logger.debug("Failed to release interaction reservation", exc_info=True)
+
+    async def _release_queued_interactions(
+        self,
+        interaction_queue: asyncio.Queue[_QueuedInteraction],
+        *,
+        request_id: str,
+        track_playback: bool,
+        interaction_payloads_by_id: dict[str, OmniInteractionPrompt],
+    ) -> None:
+        while True:
+            try:
+                queued = interaction_queue.get_nowait()
+            except asyncio.QueueEmpty:
+                return
+            interaction_payloads_by_id.pop(queued.event_id, None)
+            await self._release_interaction_reservation(request_id, queued.event_id, track_playback)
+            interaction_queue.task_done()
 
     async def _abort_request(self, request_id: str) -> None:
         try:
@@ -376,6 +486,9 @@ class OmniStreamingVideoOutputHandler:
         request_id: str,
         send_lock: asyncio.Lock,
         interaction_payloads_by_id: dict[str, OmniInteractionPrompt],
+        interaction_queue: asyncio.Queue[_QueuedInteraction],
+        stop_event: asyncio.Event,
+        progress: _SessionProgress,
         track_playback: bool = False,
     ) -> None:
         interaction = msg.get("interaction")
@@ -494,19 +607,54 @@ class OmniStreamingVideoOutputHandler:
 
         interaction_payloads_by_id[event_id] = normalized
 
+        received_at: float | None = None
+        reservation_attempted = False
         try:
+            if interaction_queue.full():
+                raise asyncio.QueueFull
             if track_playback:
-                received_at = await self._engine_client.submit_interaction_async(
-                    request_id, interaction=normalized, track_playback=True
-                )
-            else:
-                received_at = await self._engine_client.submit_interaction_async(request_id, interaction=normalized)
-        except Exception:
-            logger.exception("Failed to apply interaction for request %s", request_id, exc_info=True)
+                reservation_attempted = True
+                received_at = await self._engine_client.reserve_streaming_interaction(request_id, event_id)
+            # Only this reader enqueues. Once capacity is checked, delivery can
+            # only free more room while the ingress acknowledgement is sent.
+            try:
+                async with send_lock:
+                    await websocket.send_json(
+                        {
+                            "type": "session.interaction.queued",
+                            "request_id": request_id,
+                            "event_id": event_id,
+                            **({"received_at": received_at} if received_at is not None else {}),
+                        }
+                    )
+            except Exception:
+                logger.debug("Failed to send interaction acknowledgement for %s", request_id, exc_info=True)
+            interaction_queue.put_nowait(_QueuedInteraction(event_id=event_id, payload=normalized))
+        except asyncio.QueueFull:
             interaction_payloads_by_id.pop(event_id, None)
+            await self._release_interaction_reservation(request_id, event_id, reservation_attempted)
             await self._send_error(
                 websocket,
-                "Failed to apply interaction",
+                "interaction queue is full",
+                code="interaction_queue_full",
+                request_id=request_id,
+                event_id=event_id,
+                send_lock=send_lock,
+            )
+            stop_event.set()
+            await self._abort_request(request_id)
+            return
+        except asyncio.CancelledError:
+            interaction_payloads_by_id.pop(event_id, None)
+            await self._release_interaction_reservation(request_id, event_id, reservation_attempted)
+            raise
+        except Exception:
+            logger.exception("Failed to reserve interaction for request %s", request_id, exc_info=True)
+            interaction_payloads_by_id.pop(event_id, None)
+            await self._release_interaction_reservation(request_id, event_id, reservation_attempted)
+            await self._send_error(
+                websocket,
+                "Failed to queue interaction",
                 code="interaction_failed",
                 request_id=request_id,
                 event_id=event_id,
@@ -514,18 +662,7 @@ class OmniStreamingVideoOutputHandler:
             )
             return
 
-        try:
-            async with send_lock:
-                await websocket.send_json(
-                    {
-                        "type": "session.interaction.queued",
-                        "request_id": request_id,
-                        "event_id": event_id,
-                        **({"received_at": received_at} if received_at is not None else {}),
-                    }
-                )
-        except Exception:
-            logger.debug("Failed to send interaction acknowledgement for %s", request_id, exc_info=True)
+        progress.touch()
 
     async def _stream_video_bytes(
         self,

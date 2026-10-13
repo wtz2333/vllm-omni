@@ -108,6 +108,8 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
         self._sleeping_tags: set[str] = set()
         self._stage_sleeping_tags: dict[int, set[str]] = {}
         self._level2_sleeping: bool = False
+        # Paced interaction ingress is stamped before ordered worker delivery.
+        self._interaction_reservations: dict[tuple[str, str], float | None] = {}
 
     # ==================== Generate Method ====================
 
@@ -340,6 +342,9 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
                 input_stream_task.cancel()
             if admitting:
                 await self._release_generate_admission()
+            reservations = getattr(self, "_interaction_reservations", {})
+            for key in [key for key in reservations if key[0] == request_id]:
+                reservations.pop(key, None)
             self._log_summary_and_cleanup(request_id)
 
     async def _release_generate_admission(self) -> None:
@@ -632,6 +637,62 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
                     "update_streaming_playback", stage_ids=[0], args=(state.request_id, position_seconds)
                 )
 
+    def _resolve_interaction_request(self, request_id: str) -> str:
+        """Validate and map an external streaming id to its internal id."""
+        if self.num_stages != 1:
+            raise ValueError("interaction requires single-stage diffusion")
+        stage_meta = self.engine.get_stage_metadata(0)
+        if stage_meta.stage_type != "diffusion":
+            raise ValueError("interaction requires a diffusion stage")
+
+        internal_ids = [s.request_id for s in self.request_states.values() if s.external_request_id == request_id]
+        if not internal_ids:
+            raise ValueError(f"No active request for interaction: {request_id!r}")
+        if len(internal_ids) > 1:
+            raise ValueError(
+                f"interaction requires exactly one active request for {request_id!r}, found {len(internal_ids)}"
+            )
+        return internal_ids[0]
+
+    def _interaction_reservations_map(self) -> dict[tuple[str, str], float | None]:
+        """Lazily provide state for lightweight objects that skip ``__init__``."""
+        reservations = getattr(self, "_interaction_reservations", None)
+        if reservations is None:
+            reservations = {}
+            self._interaction_reservations = reservations
+        return reservations
+
+    async def reserve_streaming_interaction(self, request_id: str, event_id: str) -> float | None:
+        """Reserve an engine-clock ingress timestamp without waiting for a worker RPC."""
+        internal_id = self._resolve_interaction_request(request_id)
+        reservations = self._interaction_reservations_map()
+        reservation_key = (internal_id, event_id)
+        reservations[reservation_key] = None
+        try:
+            stamps = await self._engine_core_rpc(
+                "track_streaming_interaction", stage_ids=[0], args=(internal_id, event_id)
+            )
+        except BaseException:
+            # Keep the placeholder so the caller's cancellation/error path can
+            # release the engine-side reservation exactly once.
+            raise
+        stamp = next((value for value in stamps if value is not None), None)
+        if stamp is not None:
+            reservations[reservation_key] = float(stamp)
+        else:
+            reservations.pop(reservation_key, None)
+        return stamp
+
+    async def release_streaming_interaction(self, request_id: str, event_id: str) -> None:
+        """Release a reservation that will not be delivered to the worker."""
+        internal_id = self._resolve_interaction_request(request_id)
+        reservations = self._interaction_reservations_map()
+        reservation_key = (internal_id, event_id)
+        if reservation_key not in reservations:
+            return
+        reservations.pop(reservation_key, None)
+        await self._engine_core_rpc("track_streaming_interaction", stage_ids=[0], args=(internal_id, event_id, False))
+
     async def submit_interaction_async(
         self,
         request_id: str,
@@ -652,40 +713,33 @@ class AsyncOmni(AsyncOmniBase, EngineClient):
         if transition_chunks is not None and transition_chunks < 0:
             raise ValueError("transition_chunks must be >= 0")
 
-        if self.num_stages != 1:
-            raise ValueError("interaction requires single-stage diffusion")
-        stage_meta = self.engine.get_stage_metadata(0)
-        if stage_meta.stage_type != "diffusion":
-            raise ValueError("interaction requires a diffusion stage")
-
-        internal_ids = [s.request_id for s in self.request_states.values() if s.external_request_id == request_id]
-        if not internal_ids:
-            raise ValueError(f"No active request for interaction: {request_id!r}")
-        if len(internal_ids) > 1:
-            raise ValueError(
-                f"interaction requires exactly one active request for {request_id!r}, found {len(internal_ids)}"
-            )
-
-        internal_id = internal_ids[0]
-        received_at = None
-        event_id = interaction["event_id"] if track_playback else ""
+        internal_id = self._resolve_interaction_request(request_id)
+        event_id = interaction.get("event_id", "")
+        reservations = self._interaction_reservations_map()
+        reservation_key = (internal_id, event_id)
+        received_at = reservations.get(reservation_key)
+        reserved = reservation_key in reservations
+        reservation_attempted = track_playback and not reserved
         try:
-            if track_playback:
-                stamps = await self._engine_core_rpc(
-                    "track_streaming_interaction", stage_ids=[0], args=(internal_id, event_id)
-                )
-                received_at = next((stamp for stamp in stamps if stamp is not None), None)
-                interaction = {**interaction}
-                interaction.pop("received_at", None)
-                if received_at is not None:
-                    interaction["received_at"] = received_at
+            if reservation_attempted:
+                received_at = await self.reserve_streaming_interaction(request_id, event_id)
+                reserved = received_at is not None
+            # ``received_at`` is an engine-owned field. A direct caller may put
+            # one in the TypedDict, but it must never reach the runner unchanged.
+            interaction = {**interaction}
+            interaction.pop("received_at", None)
+            if received_at is not None:
+                interaction["received_at"] = received_at
             await self.engine.submit_interaction_async(internal_id, interaction=interaction)
         except BaseException:
-            if track_playback:
-                await self._engine_core_rpc(
-                    "track_streaming_interaction", stage_ids=[0], args=(internal_id, event_id, False)
-                )
+            if reserved or reservation_attempted:
+                try:
+                    await self.release_streaming_interaction(request_id, event_id)
+                except Exception:
+                    logger.debug("Failed to release interaction reservation", exc_info=True)
             raise
+        else:
+            reservations.pop(reservation_key, None)
         if self.log_stats:
             logger.info("[AsyncOmni] Queued interaction for request %s", request_id)
         return received_at

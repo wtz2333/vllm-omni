@@ -345,9 +345,10 @@ class SE3DeltaCameraHandler(InteractionHandler):
                     session.current_pose = _compose_pose(session.current_pose, event.pose)
                 remainder = fraction - whole_steps
                 if remainder > 0:
-                    session.current_pose = _compose_pose(
-                        session.current_pose, _lerp_pose(CameraPose.identity(), event.pose, remainder)
-                    )
+                    # Fractional velocity is a power of one SE(3) delta. Using
+                    # quaternion nlerp here makes the result depend on where an
+                    # event happens to be split across control segments.
+                    session.current_pose = _compose_pose(session.current_pose, _pose_power(event.pose, remainder))
             else:
                 event.elapsed_transition_frames += duration / slot_duration
                 event.elapsed_transition_chunks = event.elapsed_transition_frames / num_latent_frames
@@ -548,6 +549,67 @@ def _lerp_pose(source: CameraPose, target: CameraPose, alpha: float) -> CameraPo
 def _compose_pose(base: CameraPose, delta: CameraPose) -> CameraPose:
     """Apply ``delta`` after ``base`` in the session frame (T_new = T_base @ T_delta)."""
     return CameraPose.from_matrix(base.as_matrix() @ delta.as_matrix())
+
+
+def _pose_power(delta: CameraPose, fraction: float) -> CameraPose:
+    """Return the fractional SE(3) exponential of a per-step camera delta."""
+    fraction = min(1.0, max(0.0, fraction))
+    rotation = _quat_to_rotmat(delta.rotation)
+    omega = _so3_log(rotation)
+    theta = float(torch.linalg.vector_norm(omega))
+    omega_hat = _skew(omega)
+    theta_sq = theta * theta
+    if theta < 1e-8:
+        v_inv = torch.eye(3, dtype=torch.float64) - 0.5 * omega_hat + (1.0 / 12.0) * (omega_hat @ omega_hat)
+    else:
+        half = 0.5 * theta
+        cot_half = math.cos(half) / math.sin(half)
+        v_inv = (
+            torch.eye(3, dtype=torch.float64)
+            - 0.5 * omega_hat
+            + ((1.0 - half * cot_half) / theta_sq) * (omega_hat @ omega_hat)
+        )
+    rho = v_inv @ torch.tensor(delta.translation, dtype=torch.float64)
+    scaled_omega = fraction * omega
+    scaled_hat = _skew(scaled_omega)
+    scaled_theta = fraction * theta
+    if scaled_theta < 1e-8:
+        scaled_v = torch.eye(3, dtype=torch.float64) + 0.5 * scaled_hat + (1.0 / 6.0) * (scaled_hat @ scaled_hat)
+    else:
+        scaled_theta_sq = scaled_theta * scaled_theta
+        scaled_v = (
+            torch.eye(3, dtype=torch.float64)
+            + ((1.0 - math.cos(scaled_theta)) / scaled_theta_sq) * scaled_hat
+            + ((scaled_theta - math.sin(scaled_theta)) / (scaled_theta_sq * scaled_theta)) * (scaled_hat @ scaled_hat)
+        )
+    scaled_rotation = torch.linalg.matrix_exp(scaled_hat)
+    scaled_translation = scaled_v @ (fraction * rho)
+    return CameraPose.from_matrix(
+        torch.cat(
+            [
+                torch.cat([scaled_rotation, scaled_translation.reshape(3, 1)], dim=1),
+                torch.tensor([[0.0, 0.0, 0.0, 1.0]], dtype=torch.float64),
+            ],
+            dim=0,
+        )
+    )
+
+
+def _skew(vector: torch.Tensor) -> torch.Tensor:
+    x, y, z = (float(value) for value in vector)
+    return torch.tensor([[0.0, -z, y], [z, 0.0, -x], [-y, x, 0.0]], dtype=torch.float64)
+
+
+def _so3_log(rotation: torch.Tensor) -> torch.Tensor:
+    """Return the principal rotation vector for a 3x3 rotation matrix."""
+    x, y, z, w = _rotmat_to_quat(rotation)
+    if w < 0.0:
+        x, y, z, w = -x, -y, -z, -w
+    vector = torch.tensor((x, y, z), dtype=torch.float64)
+    norm = float(torch.linalg.vector_norm(vector))
+    if norm < 1e-8:
+        return 2.0 * vector
+    return vector * (2.0 * math.atan2(norm, w) / norm)
 
 
 def _quat_normalize(q: Quat) -> Quat:

@@ -481,6 +481,7 @@ def _build_handler_for_async_tests(
     mock_generate: Callable[..., AsyncGenerator[OmniRequestOutput, None]],
     streaming_chunks: list[tuple[bytes, bool]] | None = None,
     stall_timeout: float = 5.0,
+    streaming_buffer_seconds: float | None = None,
 ) -> tuple[OmniStreamingVideoOutputHandler, MagicMock, _MockVideoOutputWebSocket]:
     engine_client = mocker.MagicMock()
     engine_client.abort = mocker.AsyncMock()
@@ -531,7 +532,10 @@ def _build_handler_for_async_tests(
         stall_timeout=stall_timeout,
         start_timeout=5.0,
     )
-    start_msg = json.dumps({"type": "session.start", "prompt": "async test"})
+    start_data: dict[str, object] = {"type": "session.start", "prompt": "async test"}
+    if streaming_buffer_seconds is not None:
+        start_data["streaming_buffer_seconds"] = streaming_buffer_seconds
+    start_msg = json.dumps(start_data)
     ws = _MockVideoOutputWebSocket([start_msg])
     return handler, engine_client, ws
 
@@ -979,6 +983,8 @@ class TestStreamingVideoOutputPromptUpdate:
                         },
                     }
                 )
+                queued = ws.receive_json()
+                assert queued["type"] == "session.interaction.queued"
                 err = ws.receive_json()
                 assert err["type"] == "error"
                 assert "Failed to apply interaction" in err["message"]
@@ -1043,6 +1049,77 @@ class TestStreamingVideoOutputPromptUpdate:
                 "transition_chunks": 2,
             },
         )
+
+    @pytest.mark.asyncio
+    async def test_interaction_ingress_and_ack_do_not_wait_for_delivery(self, mocker: MockerFixture):
+        delivery_started = asyncio.Event()
+        release_delivery = asyncio.Event()
+        generation_release = asyncio.Event()
+        delivery_finished = asyncio.Event()
+        delivered_ids: list[str] = []
+
+        async def mock_generate(*_args, **_kwargs):
+            await generation_release.wait()
+            yield OmniRequestOutput.from_diffusion(
+                request_id="req-ws",
+                images=[_fake_video_frames(2)],
+                final_output_type="image",
+                finished=True,
+            )
+
+        handler, engine_client, ws = _build_handler_for_async_tests(
+            mocker,
+            mock_generate=mock_generate,
+            streaming_buffer_seconds=0.75,
+        )
+
+        engine_client.reserve_streaming_interaction = mocker.AsyncMock(return_value=12.5)
+        engine_client.release_streaming_interaction = mocker.AsyncMock()
+
+        async def submit(request_id, *, interaction, track_playback):
+            del request_id
+            assert track_playback is True
+            delivered_ids.append(interaction["event_id"])
+            delivery_started.set()
+            await release_delivery.wait()
+            if interaction["event_id"] == "second":
+                delivery_finished.set()
+
+        engine_client.submit_interaction_async = mocker.AsyncMock(side_effect=submit)
+        session_task = asyncio.create_task(handler.handle_session(ws))  # type: ignore[arg-type]
+        ws.enqueue(
+            json.dumps(
+                {"type": "session.interaction", "interaction": {"event_id": "first", "event": {"prompt": "one"}}}
+            )
+        )
+        await asyncio.wait_for(delivery_started.wait(), 1)
+        ws.enqueue(
+            json.dumps(
+                {"type": "session.interaction", "interaction": {"event_id": "second", "event": {"prompt": "two"}}}
+            )
+        )
+        ws.enqueue(json.dumps({"type": "session.ping"}))
+
+        async def wait_for_ingress_responses() -> None:
+            while True:
+                queued_ids = [m["event_id"] for m in ws.sent_json if m.get("type") == "session.interaction.queued"]
+                if queued_ids == ["first", "second"] and any(m.get("type") == "session.pong" for m in ws.sent_json):
+                    return
+                await asyncio.sleep(0)
+
+        await asyncio.wait_for(wait_for_ingress_responses(), 1)
+
+        queued = [m["event_id"] for m in ws.sent_json if m.get("type") == "session.interaction.queued"]
+        assert queued == ["first", "second"]
+        assert next(m for m in ws.sent_json if m.get("event_id") == "first")["received_at"] == 12.5
+        assert any(m.get("type") == "session.pong" for m in ws.sent_json)
+        assert delivered_ids == ["first"]
+
+        release_delivery.set()
+        await asyncio.wait_for(delivery_finished.wait(), 1)
+        generation_release.set()
+        await asyncio.wait_for(session_task, 2)
+        assert delivered_ids == ["first", "second"]
 
     def test_composite_prompt_and_camera_interaction_forwarded(self, mocker: MockerFixture):
         """Prompt + camera multi_modal_data is admitted and forwarded to the engine."""

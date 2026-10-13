@@ -133,6 +133,18 @@ async def test_submit_interaction_async_passes_missing_transition_chunks() -> No
 
 
 @pytest.mark.asyncio
+async def test_submit_interaction_async_ignores_direct_received_at() -> None:
+    omni = _make_async_omni()
+    omni.request_states.pop("external-abc-uuid-2")
+    interaction = {**_prompt_interaction(), "received_at": 0.0}
+
+    await omni.submit_interaction_async("external-abc", interaction=interaction)
+
+    forwarded = omni.engine.submit_interaction_async.call_args.kwargs["interaction"]
+    assert "received_at" not in forwarded
+
+
+@pytest.mark.asyncio
 async def test_submit_interaction_async_rejects_empty_prompt() -> None:
     omni = _make_async_omni()
     omni.request_states.pop("external-abc-uuid-2")

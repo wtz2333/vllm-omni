@@ -57,6 +57,42 @@ def translations(state):
     return state.interaction_sessions["camera"].last_absolute_poses[:, 2, 3]
 
 
+def _enqueue_rotation(handler, state, event_id, at, rotation):
+    handler.enqueue(
+        state,
+        event_id=event_id,
+        received_at=at,
+        payload={"mode": "velocity", "data": {"translation": [0, 0, 0], "rotation": rotation}},
+        transition_chunks=0,
+    )
+
+
+def test_paced_rotation_velocity_is_invariant_to_event_segmentation(state):
+    rotation = [0.0, 0.0, 0.5, 0.8660254037844386]
+    single = SE3DeltaCameraHandler()
+    _enqueue_rotation(single, state, "single", 0.0, rotation)
+    apply(single, state)
+    single_matrix = state.interaction_sessions["camera"].last_absolute_poses.clone()
+
+    split_state = StepRequestState(
+        request_id="split",
+        sampling=OmniDiffusionSamplingParams(streaming_buffer_seconds=1.25),
+        interaction_boundary=InteractionBoundaryContext(boundary_at=1.0, window_opened_at=0.0, window_end_at=1.0),
+        chunk_index=1,
+    )
+    split = SE3DeltaCameraHandler()
+    _enqueue_rotation(split, split_state, "first", 0.0, rotation)
+    _enqueue_rotation(split, split_state, "second", 0.15, rotation)
+    apply(split, split_state)
+
+    torch.testing.assert_close(
+        single_matrix,
+        split_state.interaction_sessions["camera"].last_absolute_poses,
+        atol=1e-12,
+        rtol=1e-12,
+    )
+
+
 @pytest.mark.parametrize("with_target", [False, True])
 def test_short_press_survives_pure_and_mixed_control_windows(state, with_target):
     handler = SE3DeltaCameraHandler()
