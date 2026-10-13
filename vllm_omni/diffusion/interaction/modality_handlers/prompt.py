@@ -14,6 +14,7 @@ from typing_extensions import override
 
 from vllm_omni.diffusion.interaction.modality_handlers.base import InteractionHandler
 from vllm_omni.diffusion.interaction.types import (
+    MAX_PENDING_INTERACTION_EVENTS,
     InteractionChunkMetadata,
     InteractionEvent,
     InteractionMode,
@@ -135,6 +136,12 @@ class PromptInteractionHandler(InteractionHandler):
         duration = DEFAULT_TRANSITION_CHUNKS if transition_chunks is None else transition_chunks
         if duration < 0:
             raise ValueError("transition_chunks must be >= 0")
+        session = state.interaction_sessions.get("prompt")
+        if isinstance(session, PromptSession):
+            with session.lock:
+                pending_count = len(session.coalesced_event_ids) + int(session.pending_event is not None)
+                if pending_count >= MAX_PENDING_INTERACTION_EVENTS:
+                    raise ValueError("too many pending prompt interactions; wait for the next chunk boundary")
 
     @override
     def enqueue(

@@ -4,8 +4,10 @@
 import asyncio
 import threading
 import time
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import asdict, dataclass
+from types import SimpleNamespace
 from unittest.mock import AsyncMock, MagicMock
 
 import pytest
@@ -199,9 +201,9 @@ async def test_proc_process_request_with_batching_async_output():
 class _FailingExecutor:
     def __init__(self, is_dead: bool = False) -> None:
         self.is_dead = is_dead
-        self.callbacks = []
+        self.callbacks: list[Callable[[], object]] = []
 
-    def register_failure_callback(self, callback) -> None:
+    def register_failure_callback(self, callback: Callable[[], object]) -> None:
         self.callbacks.append(callback)
 
 
@@ -333,6 +335,12 @@ async def test_proc_rpc_wait_allows_playback_and_abort_in_order(proc_control_loo
         )
         assert await asyncio.wait_for(outgoing.get(), 1) == {"type": "rpc_result", "rpc_id": "reserve", "result": 12.0}
         proc._engine.track_streaming_interaction.assert_called_once_with("video", "key")
+        proc._engine.release_streaming_output.return_value = None
+        submit(
+            {"type": "collective_rpc", "rpc_id": "release", "method": "release_streaming_output", "args": ["video", 0]}
+        )
+        assert await asyncio.wait_for(outgoing.get(), 1) == {"type": "rpc_result", "rpc_id": "release", "result": None}
+        proc._engine.release_streaming_output.assert_called_once_with("video", 0)
         submit({"type": "abort", "request_ids": ["video"]})
         await asyncio.wait_for(aborted.wait(), 1)
         proc._engine.abort.assert_called_once_with("video")
@@ -351,6 +359,34 @@ async def test_proc_rpc_wait_allows_playback_and_abort_in_order(proc_control_loo
         release.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)
+
+
+@pytest.mark.asyncio
+async def test_real_executor_rpc_finishes_before_cancellation() -> None:
+    """Cancelling the RPC task must not close the executor around its thread."""
+    started = threading.Event()
+    release = threading.Event()
+
+    def blocking_profile(*_args):
+        started.set()
+        assert release.wait(timeout=5)
+
+    proc = object.__new__(StageDiffusionProc)
+    proc._engine = SimpleNamespace(profile=blocking_profile)
+    proc._executor = ThreadPoolExecutor(max_workers=1)
+    task = asyncio.create_task(proc._handle_collective_rpc("profile", None, (True, None), {}))
+    try:
+        assert await asyncio.to_thread(started.wait, 1)
+        task.cancel()
+        await asyncio.sleep(0)
+        assert not task.done(), "cancellation must wait for the executor thread"
+        release.set()
+        with pytest.raises(asyncio.CancelledError):
+            await asyncio.wait_for(task, 1)
+    finally:
+        release.set()
+        await asyncio.gather(task, return_exceptions=True)
+        proc._executor.shutdown(wait=True, cancel_futures=True)
 
 
 @pytest.mark.asyncio
@@ -424,11 +460,22 @@ async def test_proc_full_rpc_queue_rejects_without_blocking_abort(proc_control_l
 @pytest.mark.asyncio
 async def test_proc_rpc_engine_death_wakes_recv_without_new_messages(proc_control_loop):
     proc, submit, outgoing, request_socket, response_socket, context = proc_control_loop
-    proc._engine.executor.is_dead = True
-    proc._engine.collective_rpc.side_effect = RuntimeError("DiffusionExecutor is closed")
+    entered = threading.Event()
+    release = threading.Event()
+
+    def collective_rpc(*_args):
+        # A startup failure bypasses RPC dispatch; simulate death after entry.
+        entered.set()
+        assert release.wait(timeout=5)
+        raise RuntimeError("DiffusionExecutor is closed")
+
+    proc._engine.collective_rpc.side_effect = collective_rpc
     task = asyncio.create_task(proc.run_loop("request", "response"))
     try:
         submit({"type": "collective_rpc", "rpc_id": "interaction", "method": "submit_interaction"})
+        assert await asyncio.to_thread(entered.wait, 1)
+        proc._engine.executor.is_dead = True
+        release.set()
         with pytest.raises(RuntimeError, match="executor reported permanent failure"):
             await asyncio.wait_for(task, 1)
         assert outgoing.get_nowait() == {
@@ -441,5 +488,6 @@ async def test_proc_rpc_engine_death_wakes_recv_without_new_messages(proc_contro
         response_socket.close.assert_called_once()
         context.term.assert_called_once()
     finally:
+        release.set()
         task.cancel()
         await asyncio.gather(task, return_exceptions=True)

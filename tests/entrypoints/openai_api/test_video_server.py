@@ -123,6 +123,17 @@ class FakeAsyncOmni:
         del request_id, timeout
 
 
+def test_regular_video_endpoint_rejects_realtime_pacing_parameter() -> None:
+    handler = OmniOpenAIServingVideo.for_diffusion(FakeAsyncOmni(), model_name="test-model")
+    with pytest.raises(HTTPException, match="only supported by /v1/realtime/video"):
+        asyncio.run(
+            handler._run_and_extract(
+                VideoGenerationRequest(prompt="video", streaming_buffer_seconds=0.75),
+                "regular-video",
+            )
+        )
+
+
 def test_raw_and_base64_encoders_receive_persistent_converter(mocker: MockerFixture):
     engine = FakeAsyncOmni()
     handler = OmniOpenAIServingVideo.for_diffusion(
@@ -3375,3 +3386,20 @@ def test_worker_fps_multiplier_is_applied_to_sync_encoding(test_client, mocker: 
     assert response.status_code == 200
     assert response.content == b"fps-multiplied"
     assert fps_values == [16]
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("streaming_max_output_bytes", 0),
+        ("streaming_max_output_bytes", True),
+        ("streaming_max_output_bytes", 1.5),
+        ("streaming_idle_timeout_s", 0),
+        ("streaming_idle_timeout_s", True),
+        ("streaming_idle_timeout_s", float("inf")),
+        ("streaming_idle_timeout_s", float("nan")),
+    ],
+)
+def test_video_request_rejects_invalid_streaming_resource_limits(field, value):
+    with pytest.raises(ValueError, match=field):
+        VideoGenerationRequest(prompt="test", **{field: value})

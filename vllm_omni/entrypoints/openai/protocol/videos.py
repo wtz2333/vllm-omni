@@ -166,7 +166,21 @@ class VideoGenerationRequest(BaseModel):
         le=10,
         strict=True,
         allow_inf_nan=False,
-        description="Realtime playback feedback window; requires session.playback updates. May overshoot by one chunk.",
+        description="Maximum generated media lead, including the next chunk; requires session.playback updates.",
+    )
+    streaming_max_output_bytes: int = Field(
+        default=64 * 1024 * 1024,
+        gt=0,
+        le=_INT64_MAX,
+        strict=True,
+        description="Maximum retained decoded chunk bytes for paced realtime video.",
+    )
+    streaming_idle_timeout_s: float = Field(
+        default=30.0,
+        gt=0,
+        strict=True,
+        allow_inf_nan=False,
+        description="Abort a paced request blocked without consumption progress for this many seconds.",
     )
     aspect_ratio: str | None = Field(
         default=None,

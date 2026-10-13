@@ -4,6 +4,8 @@
 
 from __future__ import annotations
 
+from unittest.mock import MagicMock
+
 import pytest
 import torch
 
@@ -57,20 +59,21 @@ def translations(state):
     return state.interaction_sessions["camera"].last_absolute_poses[:, 2, 3]
 
 
-def _enqueue_rotation(handler, state, event_id, at, rotation):
+def _enqueue_rotation(handler, state, event_id, at, rotation, translation):
     handler.enqueue(
         state,
         event_id=event_id,
         received_at=at,
-        payload={"mode": "velocity", "data": {"translation": [0, 0, 0], "rotation": rotation}},
+        payload={"mode": "velocity", "data": {"translation": translation, "rotation": rotation}},
         transition_chunks=0,
     )
 
 
-def test_paced_rotation_velocity_is_invariant_to_event_segmentation(state):
-    rotation = [0.0, 0.0, 0.5, 0.8660254037844386]
+@pytest.mark.parametrize("translation", [[0, 0, 0], [0.1, -0.2, 0.3]])
+@pytest.mark.parametrize("rotation", [[0.0, 0.0, 0.5, 0.8660254037844386], [0.0, 1.0, 0.0, 0.0]])
+def test_paced_rotation_velocity_is_invariant_to_event_segmentation(state, rotation, translation):
     single = SE3DeltaCameraHandler()
-    _enqueue_rotation(single, state, "single", 0.0, rotation)
+    _enqueue_rotation(single, state, "single", 0.0, rotation, translation)
     apply(single, state)
     single_matrix = state.interaction_sessions["camera"].last_absolute_poses.clone()
 
@@ -81,8 +84,8 @@ def test_paced_rotation_velocity_is_invariant_to_event_segmentation(state):
         chunk_index=1,
     )
     split = SE3DeltaCameraHandler()
-    _enqueue_rotation(split, split_state, "first", 0.0, rotation)
-    _enqueue_rotation(split, split_state, "second", 0.15, rotation)
+    _enqueue_rotation(split, split_state, "first", 0.0, rotation, translation)
+    _enqueue_rotation(split, split_state, "second", 0.15, rotation, translation)
     apply(split, split_state)
 
     torch.testing.assert_close(
@@ -287,3 +290,66 @@ def test_prompt_last_write_uses_ingress_order_and_keeps_revision_updates(state):
     assert again.coalesced_event_ids == []
     assert again.completed_event_ids == []
     assert prompt_update_versions([state]) == (1,)
+
+
+@pytest.mark.parametrize("mode", ["target", "velocity"])
+def test_camera_pending_controls_are_bounded_until_boundary(state, mode):
+    handler = SE3DeltaCameraHandler()
+    for index in range(256):
+        enqueue(handler, state, str(index), index / 1000, mode=mode)
+    with pytest.raises(ValueError, match="pending camera interactions"):
+        enqueue(handler, state, "overflow", 0.5, mode=mode)
+    session = state.interaction_sessions["camera"]
+    assert len(session.pending_events) == 256
+    meta = apply(handler, state)
+    assert set(meta.started_event_ids + meta.coalesced_event_ids) == {str(index) for index in range(256)}
+    assert not session.pending_events
+    enqueue(handler, state, "after-boundary", 1.1, mode=mode)
+    assert [event.event_id for event in session.pending_events] == ["after-boundary"]
+
+
+def test_prompt_pending_metadata_is_bounded_before_encoding(state):
+    encode_prompt = MagicMock(return_value=(torch.ones(1, 2, 3), None))
+    handler = PromptInteractionHandler(encode_prompt=encode_prompt, device="cpu", dtype=torch.float32)
+    state.prompt_embeds = torch.zeros(1, 2, 3)
+    for index in range(256):
+        handler.enqueue(
+            state, event_id=str(index), received_at=index / 1000, payload={"prompt": str(index)}, transition_chunks=0
+        )
+    with pytest.raises(ValueError, match="pending prompt interactions"):
+        handler.enqueue(
+            state, event_id="overflow", received_at=0.5, payload={"prompt": "overflow"}, transition_chunks=0
+        )
+    assert encode_prompt.call_count == 256
+    session = state.interaction_sessions["prompt"]
+    assert len(session.coalesced_event_ids) == 255
+    assert session.pending_event.event_id == "255"
+    meta = handler.apply_at_chunk_boundary(state, boundary_at=1)
+    assert meta.started_event_ids == ["255"]
+    assert meta.coalesced_event_ids == [str(index) for index in range(255)]
+    handler.enqueue(state, event_id="after-boundary", received_at=1.1, payload={"prompt": "after"}, transition_chunks=0)
+    assert session.pending_event.event_id == "after-boundary"
+
+
+def test_full_camera_queue_rejects_composite_before_prompt_encoding(state):
+    camera = SE3DeltaCameraHandler()
+    for index in range(256):
+        enqueue(camera, state, str(index), index / 1000)
+    encode_prompt = MagicMock(return_value=(torch.ones(1, 2, 3), None))
+    prompt = PromptInteractionHandler(encode_prompt=encode_prompt, device="cpu", dtype=torch.float32)
+    state.prompt_embeds = torch.zeros(1, 2, 3)
+    coordinator = InteractionCoordinator({"prompt": prompt, "camera": camera})
+    with pytest.raises(ValueError, match="pending camera interactions"):
+        coordinator.enqueue_parts(
+            state,
+            event_id="overflow",
+            received_at=0.5,
+            transition_chunks=0,
+            parts=[
+                ("prompt", {"prompt": "must not encode"}),
+                ("camera", {"mode": "velocity", "data": {"translation": [0, 0, 0]}}),
+            ],
+        )
+    encode_prompt.assert_not_called()
+    assert "prompt" not in state.interaction_sessions
+    assert len(state.interaction_sessions["camera"].pending_events) == 256

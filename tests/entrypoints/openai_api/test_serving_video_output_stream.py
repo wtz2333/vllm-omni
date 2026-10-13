@@ -9,6 +9,7 @@ import json
 from collections.abc import AsyncGenerator, Callable
 from http import HTTPStatus
 from types import SimpleNamespace
+from typing import Any
 from unittest.mock import MagicMock
 
 import numpy as np
@@ -43,12 +44,13 @@ def _build_test_app(
     mock_generate: Callable[..., AsyncGenerator[OmniRequestOutput, None]],
     final_chunk: bytes = b"",
     stall_timeout: float = 5.0,
+    stage_configs: list[object] | None = None,
 ) -> tuple[FastAPI, OmniStreamingVideoOutputHandler, MagicMock]:
     engine_client = mocker.MagicMock()
     engine_client.abort = mocker.AsyncMock()
     engine_client.submit_interaction_async = mocker.AsyncMock()
     engine_client.default_sampling_params_list = [OmniDiffusionSamplingParams()]
-    engine_client.stage_configs = [
+    engine_client.stage_configs = stage_configs or [
         SimpleNamespace(
             stage_type="diffusion",
             final_output=True,
@@ -152,11 +154,43 @@ def test_playback_feedback_reaches_engine_and_releases_next_chunk(mocker: Mocker
         ws.send_json({"type": "session.playback", "position_seconds": -1})
         assert ws.receive_json()["type"] == "error"
         engine.update_streaming_playback.assert_not_called()
+        ws.send_json({"type": "session.playback", "position_seconds": 10**401})
+        assert ws.receive_json()["type"] == "error"
+        engine.update_streaming_playback.assert_not_called()
         ws.send_json({"type": "session.playback", "position_seconds": 0.25})
         assert _receive_video_chunk(ws)[1] == b"last"
         assert ws.receive_json()["type"] == "session.done"
     assert observed == [0.75]
     engine.update_streaming_playback.assert_awaited_once_with(start["request_id"], 0.25)
+
+
+def test_paced_session_rejects_multi_stage_topology_at_start(mocker: MockerFixture):
+    generate_called = False
+
+    async def generate(*_args, **_kwargs):
+        nonlocal generate_called
+        generate_called = True
+        raise AssertionError("generation must not start for an unsupported topology")
+        yield  # pragma: no cover
+
+    app, _handler, engine = _build_test_app(
+        mocker=mocker,
+        streaming_chunks=[],
+        mock_generate=generate,
+        stage_configs=[
+            SimpleNamespace(stage_type="diffusion", final_output=False, final_output_type="video"),
+            SimpleNamespace(stage_type="diffusion", final_output=True, final_output_type="video"),
+        ],
+    )
+    engine.validate_streaming_playback_request = mocker.Mock(
+        side_effect=ValueError("playback feedback requires single-stage diffusion")
+    )
+    with TestClient(app) as client, client.websocket_connect("/v1/realtime/video") as ws:
+        ws.send_json({"type": "session.start", "prompt": "video", "streaming_buffer_seconds": 0.75})
+        error = ws.receive_json()
+        assert error["type"] == "error"
+        assert "single-stage diffusion" in error["message"]
+    assert not generate_called
 
 
 def test_disconnect_aborts_while_generation_waits_for_playback(mocker: MockerFixture):
@@ -1217,3 +1251,172 @@ class TestStreamingVideoOutputExtraParams:
         _, gen_params, _ = await self._handler()._build_prompt_and_sampling_params(request)
 
         assert gen_params.extra_args["flow_shift"] == 3.0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("first_control", ["session.ping", "session.interaction"])
+async def test_blocked_media_send_does_not_block_playback_or_stop(mocker: MockerFixture, first_control):
+    sending = asyncio.Event()
+    release_send = asyncio.Event()
+    aborted = asyncio.Event()
+
+    async def generate(*_args, **_kwargs):
+        yield OmniRequestOutput.from_diffusion(
+            request_id="req-ws", images=[_fake_video_frames(2)], final_output_type="image", finished=True
+        )
+
+    handler, engine, ws = _build_handler_for_async_tests(mocker, mock_generate=generate)
+    engine.update_streaming_playback = mocker.AsyncMock()
+    engine.abort = mocker.AsyncMock(side_effect=lambda *_: aborted.set())
+
+    async def send_bytes(data):
+        sending.set()
+        await release_send.wait()
+        ws.sent.append(data)
+
+    mocker.patch.object(ws, "send_bytes", send_bytes)
+    tasks_before = asyncio.all_tasks()
+    session = asyncio.create_task(handler.handle_session(ws))
+    try:
+        await asyncio.wait_for(sending.wait(), 1)
+        ws.enqueue(
+            json.dumps({"type": first_control, "interaction": {"event_id": "first", "event": {"prompt": "one"}}})
+        )
+        ws.enqueue(json.dumps({"type": "session.playback", "position_seconds": 0.25}))
+        ws.enqueue(json.dumps({"type": "session.stop"}))
+        await asyncio.wait_for(aborted.wait(), 1)
+        engine.update_streaming_playback.assert_awaited_once()
+        assert engine.update_streaming_playback.call_args.args[1] == 0.25
+        assert not release_send.is_set()
+    finally:
+        session.cancel()
+        await asyncio.gather(session, return_exceptions=True)
+    assert not (asyncio.all_tasks() - tasks_before)
+
+
+@pytest.mark.asyncio
+async def test_control_ack_outbox_keeps_fifo_and_media_pair(mocker: MockerFixture):
+    sending = asyncio.Event()
+    release_send = asyncio.Event()
+    delivered = asyncio.Event()
+    ids = []
+
+    async def generate(*_args, **_kwargs):
+        yield OmniRequestOutput.from_diffusion(
+            request_id="req-ws", images=[_fake_video_frames(2)], final_output_type="image", finished=True
+        )
+
+    handler, engine, ws = _build_handler_for_async_tests(mocker, mock_generate=generate)
+
+    async def submit(_request_id, *, interaction):
+        ids.append(interaction["event_id"])
+        if len(ids) == 2:
+            delivered.set()
+
+    engine.submit_interaction_async = mocker.AsyncMock(side_effect=submit)
+
+    async def send_bytes(data):
+        sending.set()
+        await release_send.wait()
+        ws.sent.append(data)
+
+    mocker.patch.object(ws, "send_bytes", send_bytes)
+    session = asyncio.create_task(handler.handle_session(ws))
+    try:
+        await asyncio.wait_for(sending.wait(), 1)
+        for event_id in ("first", "second"):
+            ws.enqueue(
+                json.dumps(
+                    {
+                        "type": "session.interaction",
+                        "interaction": {"event_id": event_id, "event": {"prompt": event_id}},
+                    }
+                )
+            )
+        await asyncio.wait_for(delivered.wait(), 1)
+        assert not any(item.get("type") == "session.interaction.queued" for item in ws.sent_json)
+        release_send.set()
+        await asyncio.wait_for(session, 2)
+    finally:
+        session.cancel()
+        await asyncio.gather(session, return_exceptions=True)
+    assert [item["event_id"] for item in ws.sent_json if item.get("type") == "session.interaction.queued"] == ids
+    metadata_index = next(
+        index
+        for index, item in enumerate(ws.sent)
+        if isinstance(item, dict) and item.get("type") == "video.chunk_metadata"
+    )
+    assert ws.sent[metadata_index + 1] == b"mp4-chunk-0"
+    assert ws.sent_json[-1]["type"] == "session.done"
+
+
+@pytest.mark.asyncio
+async def test_control_ack_outbox_overflow_aborts_before_notification(mocker: MockerFixture):
+    sending = asyncio.Event()
+    aborted = asyncio.Event()
+
+    async def generate(*_args, **_kwargs):
+        yield OmniRequestOutput.from_diffusion(
+            request_id="req-ws", images=[_fake_video_frames(2)], final_output_type="image", finished=True
+        )
+
+    handler, engine, ws = _build_handler_for_async_tests(mocker, mock_generate=generate)
+    engine.abort = mocker.AsyncMock(side_effect=lambda *_: aborted.set())
+
+    async def send_bytes(_data):
+        sending.set()
+        await asyncio.Event().wait()
+
+    mocker.patch.object(ws, "send_bytes", send_bytes)
+    tasks_before = asyncio.all_tasks()
+    session = asyncio.create_task(handler.handle_session(ws))
+    try:
+        await asyncio.wait_for(sending.wait(), 1)
+        for _ in range(66):
+            ws.enqueue(json.dumps({"type": "session.ping"}))
+        await asyncio.wait_for(aborted.wait(), 1)
+        assert not any(item.get("type") == "error" for item in ws.sent_json)
+    finally:
+        session.cancel()
+        await asyncio.gather(session, return_exceptions=True)
+    assert not (asyncio.all_tasks() - tasks_before)
+
+
+def test_chunk_metadata_preserves_engine_pacing_fields():
+    pacing = {"generated_seconds": 1.5, "played_seconds": 0.75, "inflight_seconds": 0.0}
+    metadata = OmniStreamingVideoOutputHandler._build_chunk_metadata(
+        request_id="req",
+        kind="media",
+        byte_length=12,
+        num_frames=12,
+        stream_metadata={"generation_chunk_index": 3, "output_chunk_index": 4, "pacing": pacing},
+    )
+    assert metadata["output_chunk_index"] == 4
+    assert metadata["pacing"] == pacing
+
+
+@pytest.mark.asyncio
+async def test_interaction_event_id_is_bounded_before_reservation(mocker: MockerFixture):
+    from vllm_omni.entrypoints.openai.serving_video_output_stream import _SessionProgress
+
+    async def generate(*_args, **_kwargs):
+        if False:
+            yield
+
+    handler, engine, ws = _build_handler_for_async_tests(mocker, mock_generate=generate)
+    responses: asyncio.Queue[dict[str, Any]] = asyncio.Queue(maxsize=64)
+    await handler._handle_interaction(
+        ws,
+        {"interaction": {"event_id": "x" * 129, "event": {"prompt": "one"}}},
+        request_id="req",
+        send_lock=asyncio.Lock(),
+        interaction_event_ids=set(),
+        interaction_queue=asyncio.Queue(maxsize=64),
+        stop_event=asyncio.Event(),
+        progress=_SessionProgress(),
+        track_playback=True,
+        response_queue=responses,
+    )
+    assert "at most 128" in responses.get_nowait()["message"]
+    engine.reserve_streaming_interaction.assert_not_called()
+    engine.submit_interaction_async.assert_not_called()
