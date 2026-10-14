@@ -493,6 +493,24 @@ def test_internal_pacing_deadline_does_not_start_client_idle_timeout():
     assert state.idle_since is None
 
 
+def test_next_chunk_credit_wait_starts_client_idle_timeout():
+    from vllm_omni.diffusion.diffusion_engine import _StreamingPlayback
+
+    engine = _make_engine_with_loop(None, start_loop=False)
+    state = _StreamingPlayback(buffer_seconds=1.0, idle_timeout_s=0.01)
+    state.generated_seconds = 0.6
+    state.next_media_duration = 0.6
+    state.pending_boundary = True
+    state.next_ready_at = time.monotonic() - 1.0
+    engine._streaming_playback = {"paced": state}
+
+    assert engine._playback_blocked()
+    assert state.idle_since is not None
+    state.idle_since -= state.idle_timeout_s
+    engine._expire_streaming_idle()
+    assert not engine._streaming_playback
+
+
 @pytest.mark.parametrize("position", [True, -1, float("nan"), float("inf"), "1"])
 def test_playback_feedback_rejects_invalid_positions(position):
     engine = _make_engine_with_loop(None, start_loop=False)

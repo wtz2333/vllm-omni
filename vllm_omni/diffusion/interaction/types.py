@@ -20,7 +20,7 @@ InteractionPayload = Mapping[str, object]
 # Prompt specialization narrows this to ``"target"`` only.
 InteractionMode = Literal["target", "velocity"]
 
-# Include coalesced event IDs: acknowledgements also occupy pending memory.
+# Bound request-local interaction reservations independently of transport queue size.
 MAX_PENDING_INTERACTION_EVENTS = 256
 
 
@@ -164,17 +164,13 @@ class InteractionChunkMetadata:
     started_event_ids: list[str] = field(default_factory=list)
     active_event_ids: list[str] = field(default_factory=list)
     completed_event_ids: list[str] = field(default_factory=list)
-    coalesced_event_ids: list[str] = field(default_factory=list)
 
     def as_dict(self) -> dict[str, list[str]]:
-        metadata = {
+        return {
             "started_event_ids": list(self.started_event_ids),
             "active_event_ids": list(self.active_event_ids),
             "completed_event_ids": list(self.completed_event_ids),
         }
-        if self.coalesced_event_ids:
-            metadata["coalesced_event_ids"] = list(self.coalesced_event_ids)
-        return metadata
 
 
 def merge_interaction_metadata(
@@ -184,11 +180,9 @@ def merge_interaction_metadata(
     started: list[str] = []
     active: list[str] = []
     completed: list[str] = []
-    coalesced: list[str] = []
     seen_started: set[str] = set()
     seen_active: set[str] = set()
     seen_completed: set[str] = set()
-    seen_coalesced: set[str] = set()
     for meta in metas:
         for event_id in meta.started_event_ids:
             if event_id not in seen_started:
@@ -202,13 +196,8 @@ def merge_interaction_metadata(
             if event_id not in seen_completed:
                 seen_completed.add(event_id)
                 completed.append(event_id)
-        for event_id in meta.coalesced_event_ids:
-            if event_id not in seen_coalesced:
-                seen_coalesced.add(event_id)
-                coalesced.append(event_id)
     return InteractionChunkMetadata(
         started_event_ids=started,
         active_event_ids=active,
         completed_event_ids=completed,
-        coalesced_event_ids=coalesced,
     )

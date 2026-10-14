@@ -76,15 +76,21 @@ client playhead. Enable step execution, `streaming_output=True` and
 
 ```json
 {
-  "streaming_buffer_seconds": 1.5,
-  "streaming_max_output_bytes": 67108864,
-  "streaming_idle_timeout_s": 30
+  "streaming_pacing": {
+    "enabled": true,
+    "mode": "client_playhead",
+    "max_lead_ms": 1500,
+    "max_output_bytes": 67108864,
+    "idle_timeout_s": 30
+  }
 }
 ```
 
 This is a request fragment; include the model's normal prompt, image and video
-parameters. Omitting `streaming_buffer_seconds` or sending `null` keeps unpaced
-execution. The ordinary `/v1/videos` endpoint does not accept playback pacing.
+parameters. Omitting `streaming_pacing` or setting `enabled` to `false` keeps
+unpaced execution. `streaming_buffer_seconds` remains a compatibility alias for
+the PR 6 request shape. The ordinary `/v1/videos` endpoint does not accept
+playback pacing.
 
 While playing, repeatedly send the actual cumulative media playhead:
 

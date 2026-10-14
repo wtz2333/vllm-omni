@@ -841,9 +841,11 @@ class DiffusionEngine:
                     # Only client-controlled progress can expire a request.
                     # A media deadline or ordered control delivery is internal
                     # pacing and must not look like an idle consumer.
-                    client_blocked = (
-                        state.outstanding_chunk is not None
-                        or state.generated_seconds - state.played_seconds >= state.buffer_seconds
+                    client_blocked = state.outstanding_chunk is not None or (
+                        state.pending_boundary
+                        and now >= state.next_ready_at
+                        and state.generated_seconds + state.next_media_duration - state.played_seconds
+                        > state.buffer_seconds + 1e-9
                     )
                     if client_blocked:
                         if state.idle_since is None:
