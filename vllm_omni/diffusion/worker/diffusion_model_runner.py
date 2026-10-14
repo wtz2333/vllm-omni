@@ -935,6 +935,7 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
             output.started_event_ids = list(meta.started_event_ids)
             output.active_event_ids = list(meta.active_event_ids)
             output.completed_event_ids = list(meta.completed_event_ids)
+            output.coalesced_event_ids = list(meta.coalesced_event_ids)
 
     def execute_model(
         self,
