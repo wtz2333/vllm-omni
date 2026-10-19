@@ -188,6 +188,12 @@ The following tables show which models support each feature:
 
 ### VideoGen
 
+[EdenLive 5B few-step](../../recipes/VAST/EdenLive-5B.md) has an experimental
+single-device eager path with AR step execution and streaming output.
+Its CPU contracts and single-H200 reference parity, streaming and cancellation
+are tested; see the recipe for the validated scope. Parallelism, offload,
+quantization and denoising cache acceleration are not enabled.
+
 | Model                        | ⚡TeaCache | ⚡Cache-DiT | 🔀SP (Ulysses & Ring) | 🔀CFG-Parallel | 🔀Tensor-Parallel | Pipeline-Parallel | 🔀HSDP | 💾CPU Offload (Layerwise) | 💾VAE-Patch-Parallel | 💾Quantization | 🔄Step Execution |
 |------------------------------|:---------:|:----------:|:---------------------:|:--------------:|:-----------------:|:-----------------:|:------:|:-------------------------:|:--------------------:|:--------------:|:----------------:|
 | **Wan2.2**                   |     ❌     |     ✅      |           ✅           |       ✅        |         ✅         |         ✅         |   ✅    |             ✅             |  ✅ (encode/decode)   |       ❌        |        ❌         |

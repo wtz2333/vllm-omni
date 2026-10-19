@@ -39,6 +39,13 @@ BOOGU_IMAGE_MAX_INPUT_IMAGES = 1
 
 
 _DIFFUSION_MODEL_METADATA: dict[str, DiffusionModelMetadata] = {
+    "EdenLivePipeline": DiffusionModelMetadata(
+        supports_multimodal_inputs=True,
+        max_multimodal_image_inputs=1,
+        supports_mixed_reference_inputs=True,
+        attention_mask_free=True,
+        final_output_type="video",
+    ),
     "SeedVR2Pipeline": DiffusionModelMetadata(supports_multimodal_inputs=True, final_output_type="video"),
     "Flux2KleinPipeline": DiffusionModelMetadata(
         supports_multimodal_inputs=True,

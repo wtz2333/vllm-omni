@@ -146,6 +146,7 @@ def parse_args() -> argparse.Namespace:
         help="Optional deploy config YAML to use for pipeline-backed runs.",
     )
     parser.add_argument("--image", help="Path to the first-frame or source image.")
+    parser.add_argument("--video", help="Path to an additional reference video for models accepting mixed references.")
     parser.add_argument("--last-image", help="Path to a last-frame condition (used by models such as VACE).")
     parser.add_argument("--mask-image", help="Path to an inpainting mask (used by models such as VACE).")
     parser.add_argument(
@@ -524,6 +525,8 @@ def main():
         width = width or calc_width
 
     media_inputs: dict[str, Any] = {}
+    if args.video is not None:
+        media_inputs["video"] = args.video
     if image is not None:
         preserve_image_size = should_preserve_reference_image_size(
             model_class_name,

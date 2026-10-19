@@ -24,6 +24,10 @@ from vllm_omni.model_extras.cosmos3 import (
     COSMOS3_EXTRA_BODY_PARAMS,
     COSMOS3_EXTRA_OUTPUT_PARAMS,
 )
+from vllm_omni.model_extras.edenlive import (
+    edenlive_transformer_config_subfolder,
+    get_edenlive_video_generation_defaults,
+)
 from vllm_omni.model_extras.helios import (
     HELIOS_EXTRA_BODY_PARAMS,
     HELIOS_EXTRA_OUTPUT_PARAMS,
@@ -223,6 +227,12 @@ def _always_preserve_reference_image_size(
 
 
 _EXTRA_SPECS: dict[str, dict[str, Any]] = {
+    "EdenLivePipeline": {
+        "video_generation_defaults_builder": get_edenlive_video_generation_defaults,
+        "transformer_config_subfolder_resolver": edenlive_transformer_config_subfolder,
+        "output_tensor_range": "zero_to_one",
+        "reference_image_size_resolver": _always_preserve_reference_image_size,
+    },
     "BagelPipeline": {
         "extra_body_params": BAGEL_EXTRA_BODY_PARAMS,
         "extra_output_params": BAGEL_EXTRA_OUTPUT_PARAMS,

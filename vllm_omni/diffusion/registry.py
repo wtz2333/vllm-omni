@@ -34,6 +34,7 @@ def resolve_native_single_file(model_class_name: str | None) -> str | None:
 
 
 _DIFFUSION_MODELS = {
+    "EdenLivePipeline": ("edenlive", "pipeline_edenlive", "EdenLivePipeline"),
     # arch:(mod_folder, mod_relname, cls_name)
     "SeedVR2Pipeline": ("seedvr2", "pipeline_seedvr2", "SeedVR2Pipeline"),
     "QwenImagePipeline": (
@@ -462,6 +463,7 @@ _NO_CACHE_ACCELERATION = {
     "Pi0Pipeline",
     "Pi05Pipeline",
     "LingBotWorldCausalDMDPipeline",
+    "EdenLivePipeline",
     "TaoMateH3Pipeline",
     "CausVidWanPipeline",
     "ABotWorldCausalPipeline",
@@ -749,6 +751,7 @@ _DIFFUSION_POST_PROCESS_FUNCS = {
     "FluxDMD2Pipeline": "get_flux_post_process_func",
     "QwenImageDMD2Pipeline": "get_qwen_image_post_process_func",
     "OmniGen2Pipeline": "get_omnigen2_post_process_func",
+    "EdenLivePipeline": "get_edenlive_post_process_func",
     "HeliosPipeline": "get_helios_post_process_func",
     "HeliosPyramidPipeline": "get_helios_post_process_func",
     "Flux2Pipeline": "get_flux2_post_process_func",
