@@ -158,6 +158,12 @@ def _normalize_pipeline_outputs(
     return outputs
 
 
+#: How many interactions one request may have waiting for its next step.
+_MAX_PENDING_INTERACTIONS_PER_REQUEST = 32
+#: How many requests may hold a queue at once.
+_MAX_PENDING_INTERACTION_REQUESTS = 64
+
+
 class DiffusionModelRunner(DiffusionStagePayloadMixin):
     """
     Model runner that handles model loading and execution for diffusion models.
@@ -202,6 +208,10 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
 
         # Cache for per-request stepwise state.
         self.state_cache: dict[str, StepRequestState] = {}
+        # Interactions that arrived between steps. A paced stream spends most of
+        # its life waiting for playback, with no step in flight, so a control that
+        # lands in that window must wait for the next step instead of failing.
+        self._pending_interactions: dict[str, list[OmniInteractionPrompt]] = {}
 
         # Initialize KV cache manager for connector management.
         payload_transfer_manager = OmniKVTransferManager.from_od_config(od_config)
@@ -226,7 +236,8 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
         )
 
     @property
-    def _target_device(self) -> torch.device | None:
+    def _target_device(self) -> torch.device | None:  # type: ignore[override]
+        # The base class declares this name as a writeable attribute.
         return getattr(self.pipeline, "device", None)
 
     def _validate_diffusion_kv_metadata(
@@ -1109,6 +1120,7 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
         surviving requests retain their own state and are repacked on the next step.
         """
         for request_id in request_ids:
+            self._pending_interactions.pop(request_id, None)
             state = self.state_cache.pop(request_id, None)
             release = getattr(getattr(self, "pipeline", None), "release_step_request", None)
             if state is not None and callable(release):
@@ -1178,6 +1190,7 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
                 context = scheduler_output.interaction_boundaries.get(state.request_id)
                 if context is not None:
                     state.interaction_boundary = context
+                self._flush_pending_interactions(state)
         except Exception:
             for request_id in new_request_ids:
                 self.state_cache.pop(request_id, None)
@@ -1603,7 +1616,14 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
         request_id: str,
         interaction: OmniInteractionPrompt,
     ) -> None:
-        """Route a midway interaction through the pipeline interaction coordinator."""
+        """Route a midway interaction through the pipeline interaction coordinator.
+
+        Between two steps a streaming request owns no state (the scheduler retires
+        it at every chunk boundary, and a paced stream waits for playback there).
+        An interaction that lands in that window is kept for the request's next
+        step instead of being rejected; ``No active request state`` is only raised
+        when the request is unknown for longer than the queue tolerates.
+        """
         assert self.pipeline is not None and self._interaction_coordinator is not None, (
             "Model not loaded. Call load_model() first."
         )
@@ -1614,8 +1634,43 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
 
         state = self.state_cache.get(request_id)
         if state is None:
-            raise ValueError(f"No active request state for interaction: {request_id!r}")
+            self._queue_interaction(request_id, interaction)
+            return
+        self._deliver_interaction(state, interaction)
 
+    def _queue_interaction(self, request_id: str, interaction: OmniInteractionPrompt) -> None:
+        """Hold an interaction until the request schedules its next step."""
+        # A request id that never comes back would otherwise keep its queue forever.
+        while len(self._pending_interactions) >= _MAX_PENDING_INTERACTION_REQUESTS:
+            oldest = next(iter(self._pending_interactions))
+            if oldest == request_id:
+                break
+            self._pending_interactions.pop(oldest)
+            logger.debug("Dropped queued interactions for retired request %s.", oldest)
+        pending = self._pending_interactions.setdefault(request_id, [])
+        if len(pending) >= _MAX_PENDING_INTERACTIONS_PER_REQUEST:
+            logger.warning(
+                "Dropping the oldest queued interaction for %s; %d are already waiting.",
+                request_id,
+                len(pending),
+            )
+            pending.pop(0)
+        pending.append(interaction)
+        logger.debug("Queued interaction %s for %s until its next step.", interaction.get("event_id"), request_id)
+
+    def _flush_pending_interactions(self, state: StepRequestState) -> None:
+        """Apply interactions that arrived before this request had a step to run."""
+        pending = self._pending_interactions.pop(state.request_id, None)
+        if not pending:
+            return
+        logger.info("Applying %d queued interaction(s) to %s.", len(pending), state.request_id)
+        for interaction in pending:
+            self._deliver_interaction(state, interaction)
+
+    def _deliver_interaction(self, state: StepRequestState, interaction: OmniInteractionPrompt) -> None:
+        """Validate one interaction and hand it to the pipeline's coordinator."""
+        coordinator = self._interaction_coordinator
+        assert coordinator is not None, "Model not loaded. Call load_model() first."
         event = interaction["event"]
         parts: list[tuple[str, InteractionPayload]] = []
         prompt = event.get("prompt")
@@ -1635,7 +1690,7 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
             or received_at < 0
         ):
             raise ValueError("interaction received_at must be finite and non-negative")
-        self._interaction_coordinator.enqueue_parts(
+        coordinator.enqueue_parts(
             state,
             parts=parts,
             event_id=interaction["event_id"],
