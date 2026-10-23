@@ -96,6 +96,7 @@ export class VideoSession {
     this.video.src = this.url;
     this.video.autoplay = false;
     const fps = config.payload.fps || 16;
+    this.fps = fps;
     // How far generation may run ahead of playback, in media time. Two frames is
     // one chunk of look-ahead regardless of the chunk size the server picks, and a
     // caller that wants smoother playback can override it through the payload.
@@ -180,7 +181,7 @@ export class VideoSession {
         // Size the start threshold from the chunk the server actually sends.
         if (this.chunkIndex === 0 && Number.isFinite(message.num_frames) && message.num_frames > 1) {
           const frames = message.num_frames;
-          const rate = Number.isFinite(config.payload.fps) && config.payload.fps > 0 ? config.payload.fps : fps;
+          const rate = Number.isFinite(this.fps) && this.fps > 0 ? this.fps : 16;
           this.startupBufferSeconds = Math.max(1 / rate, (frames - 1) / rate);
         }
         const applied = message.started_event_ids || [];
