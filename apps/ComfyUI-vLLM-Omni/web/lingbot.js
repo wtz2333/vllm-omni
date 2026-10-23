@@ -459,6 +459,7 @@ function buildPanel(node, app, VideoSession, cameraEvent) {
     if (text === "Generating the first chunk…") return setPhase("waiting");
     if (text.startsWith("Chunk ")) return setPhase(session.done ? "complete" : "playing");
     if (text.startsWith("Queued:")) return setDetail("Prompt queued; the next chunk applies it.");
+    if (text.startsWith("Control ")) return setDetail(text);
     if (text === "Stopping…") return setPhase("stopping");
     if (text.startsWith("Stopped")) return setPhase("stopped");
     if (text.startsWith("Generation complete") || text === "Playback complete.") return setPhase("complete");

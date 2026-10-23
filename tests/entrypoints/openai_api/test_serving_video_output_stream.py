@@ -1247,6 +1247,17 @@ class TestStreamingVideoOutputExtraParams:
         assert excinfo.value.status_code == HTTPStatus.BAD_REQUEST.value
         assert "preencode_mp4" in excinfo.value.detail
 
+    async def test_pacing_block_expresses_lead_in_chunks(self):
+        """A client asks for chunk units, so the window follows the server's geometry."""
+        request = VideoGenerationRequest(prompt="p", streaming_pacing={"enabled": True, "lead_chunks": 1})
+
+        _, gen_params, _ = await self._handler()._build_prompt_and_sampling_params(request)
+
+        assert gen_params.streaming_lead_chunks == 1
+        # The seconds window only seeds the first boundary; the engine rewrites it
+        # from the chunk it actually generates.
+        assert gen_params.streaming_buffer_seconds == 1.0
+
     async def test_other_extra_params_still_reach_the_engine(self):
         request = VideoGenerationRequest(prompt="p", extra_params={"flow_shift": 3.0})
 

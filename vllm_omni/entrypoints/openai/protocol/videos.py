@@ -79,6 +79,10 @@ class StreamingPacingConfig(BaseModel):
     enabled: bool = True
     mode: Literal["client_playhead"] = "client_playhead"
     max_lead_ms: float = Field(default=1000.0, gt=0, le=10_000, allow_inf_nan=False)
+    #: Look-ahead in whole media chunks. The engine derives the seconds window from
+    #: the chunk it is about to generate, so a client never has to know the model's
+    #: chunk geometry. Takes precedence over ``max_lead_ms`` when set.
+    lead_chunks: int | None = Field(default=None, ge=0, le=8)
     max_output_bytes: int = Field(default=64 * 1024 * 1024, gt=0, le=_INT64_MAX, strict=True)
     idle_timeout_s: float = Field(default=30.0, gt=0, le=86_400, allow_inf_nan=False)
 

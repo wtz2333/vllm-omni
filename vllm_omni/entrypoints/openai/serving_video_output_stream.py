@@ -140,7 +140,7 @@ class OmniStreamingVideoOutputHandler:
             pacing = request.streaming_pacing
             # Unpaced sessions keep the pre-backpressure unbounded sends.
             idle_timeout = pacing.idle_timeout_s if pacing is not None and pacing.enabled else None
-            if request.streaming_buffer_seconds is not None:
+            if request.streaming_pacing is not None:
                 validate_pacing = getattr(self._engine_client, "validate_streaming_playback_request", None)
                 if callable(validate_pacing):
                     try:
@@ -179,7 +179,7 @@ class OmniStreamingVideoOutputHandler:
                     send_lock=send_lock,
                     progress=progress,
                     interaction_event_ids=interaction_event_ids,
-                    track_playback=request.streaming_buffer_seconds is not None,
+                    track_playback=request.streaming_pacing is not None,
                 )
             )
             control_task = asyncio.create_task(
@@ -191,7 +191,7 @@ class OmniStreamingVideoOutputHandler:
                     progress,
                     interaction_event_ids,
                     interaction_queue,
-                    request.streaming_buffer_seconds is not None,
+                    request.streaming_pacing is not None,
                     stop_received_at=stop_received_at,
                     response_queue=response_queue,
                 )
@@ -291,7 +291,7 @@ class OmniStreamingVideoOutputHandler:
                     await self._release_queued_interactions(
                         interaction_queue,
                         request_id=request_id,
-                        track_playback=request is not None and request.streaming_buffer_seconds is not None,
+                        track_playback=request is not None and request.streaming_pacing is not None,
                         interaction_event_ids=interaction_event_ids,
                     )
                 if response_task is not None:
@@ -902,6 +902,11 @@ class OmniStreamingVideoOutputHandler:
         gen_params = self._resolve_default_sampling_params()
         gen_params.streaming_buffer_seconds = request.streaming_buffer_seconds
         if request.streaming_pacing is not None and request.streaming_pacing.enabled:
+            gen_params.streaming_lead_chunks = request.streaming_pacing.lead_chunks
+            if gen_params.streaming_buffer_seconds is None and request.streaming_pacing.lead_chunks is None:
+                # A pacing block without a window still means the client will report
+                # playback; use its lead budget rather than silently leaving it unpaced.
+                gen_params.streaming_buffer_seconds = request.streaming_pacing.max_lead_ms / 1000.0
             gen_params.streaming_max_output_bytes = request.streaming_pacing.max_output_bytes
             gen_params.streaming_idle_timeout_s = request.streaming_pacing.idle_timeout_s
         vp = request.resolve_video_params()

@@ -360,6 +360,9 @@ class OmniDiffusionSamplingParams:
     # engine starts another chunk only while generated media is below this
     # many seconds ahead of the client's reported playback position.
     streaming_buffer_seconds: float | None = None
+    # Look-ahead in whole media chunks; the engine turns it into seconds from the
+    # chunk it is about to generate, so pacing needs no client-side geometry.
+    streaming_lead_chunks: int | None = None
     streaming_max_output_bytes: int = 64 * 1024 * 1024
     streaming_idle_timeout_s: float = 30.0
     # AsyncOmni releases each output only after its consumer resumes iteration.
@@ -374,6 +377,11 @@ class OmniDiffusionSamplingParams:
             or not 0 < buffer <= 10
         ):
             raise ValueError("streaming_buffer_seconds must be finite and in (0, 10]")
+        lead_chunks = self.streaming_lead_chunks
+        if lead_chunks is not None and (
+            isinstance(lead_chunks, bool) or not isinstance(lead_chunks, int) or not 0 <= lead_chunks <= 8
+        ):
+            raise ValueError("streaming_lead_chunks must be an integer in [0, 8]")
         if (
             isinstance(self.streaming_max_output_bytes, bool)
             or not isinstance(self.streaming_max_output_bytes, int)

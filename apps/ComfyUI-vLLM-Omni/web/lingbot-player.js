@@ -96,13 +96,12 @@ export class VideoSession {
     this.video.src = this.url;
     this.video.autoplay = false;
     const fps = config.payload.fps || 16;
-    // The server holds the next chunk back when it would push generated media past
-    // this window, so the window must cover the first chunk plus one more, or the
-    // player never buffers enough to start and the session idles out.
-    const windowSeconds = config.payload.streaming_buffer_seconds ?? 1.5;
-    // Start once the first chunk is in: waiting for more than one chunk can deadlock,
-    // because the server holds the next chunk back until playback advances.
-    this.startupBufferSeconds = Math.min(0.5, Math.max(0.25, windowSeconds / 3));
+    // How far generation may run ahead of playback, in media time. Two frames is
+    // one chunk of look-ahead regardless of the chunk size the server picks, and a
+    // caller that wants smoother playback can override it through the payload.
+    // Start on the first chunk. Waiting for a fixed second or two can deadlock:
+    // the server holds later chunks back until playback advances.
+    this.startupBufferSeconds = 1 / fps;
     this.startTimer = setTimeout(() => this.fail("Timed out opening the video connection."), 15000);
     source.addEventListener("sourceopen", () => {
       if (this.source !== source) return;
@@ -119,8 +118,10 @@ export class VideoSession {
         ws.onopen = () => {
           if (this.ws !== ws) return;
           clearTimeout(this.startTimer);
+          // Ask for one chunk of look-ahead; the server turns that into seconds
+          // from the chunk it is about to generate, so the panel needs no geometry.
           this.send(config.keyboard
-            ? { ...config.payload, streaming_buffer_seconds: config.payload.streaming_buffer_seconds ?? 1.5 }
+            ? { ...config.payload, streaming_pacing: { enabled: true, lead_chunks: 1 } }
             : config.payload);
           this.pingTimer = setInterval(() => this.send({ type: "session.ping" }), 20000);
           if (config.keyboard) this.playbackTimer = setInterval(() => this.sendPlayback(), 100);
@@ -158,6 +159,10 @@ export class VideoSession {
     if (typeof message.request_id === "string") this.requestId = message.request_id;
     if (message.type === "error") {
       const detail = message.message || "Server error";
+      if (message.code === "interaction_failed" && typeof message.event_id === "string") {
+        this.report(`Control ${message.event_id} failed: ${detail}`);
+        return;
+      }
       // A control that lost the race with the end of the session is not a
       // failure the viewer can act on; the take is already complete.
       if (this.done || this.stopping) {
@@ -172,6 +177,12 @@ export class VideoSession {
         this.ready = !this.stopping;
         if (Number.isInteger(message.generation_chunk_index)) this.chunkIndex = message.generation_chunk_index;
         if (Number.isFinite(message.num_frames)) this.framesReceived += message.num_frames;
+        // Size the start threshold from the chunk the server actually sends.
+        if (this.chunkIndex === 0 && Number.isFinite(message.num_frames) && message.num_frames > 1) {
+          const frames = message.num_frames;
+          const rate = Number.isFinite(config.payload.fps) && config.payload.fps > 0 ? config.payload.fps : fps;
+          this.startupBufferSeconds = Math.max(1 / rate, (frames - 1) / rate);
+        }
         const applied = message.started_event_ids || [];
         this.report(`Chunk ${message.generation_chunk_index ?? "?"} received` +
           (applied.length ? `; applied: ${applied.join(", ")}` : ""));

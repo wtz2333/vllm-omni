@@ -1263,9 +1263,6 @@ class DiffusionModelRunner(DiffusionStagePayloadMixin):
                                 self._interaction_coordinator.maybe_prepare_initial_session(state, pipe)
                             )
                         pipe.prepare_next_chunk(state)
-                        buffer_seconds = getattr(state.sampling, "streaming_buffer_seconds", None)
-                        if buffer_seconds is not None and pipe.peek_chunk_media(state).duration_s > buffer_seconds:
-                            raise ValueError("streaming_buffer_seconds must fit a complete media chunk")
                     merge_stage_durations(
                         state,
                         consume_pipeline_stage_durations(pipeline),

@@ -605,35 +605,6 @@ def test_chunk_boundary_defers_only_when_playback_feedback_is_enabled(monkeypatc
 
 
 @pytest.mark.cpu
-def test_playback_window_rejects_oversized_first_chunk_before_denoising(monkeypatch, mocker):
-    from vllm_omni.diffusion.interaction.types import ChunkMediaSpec
-
-    class InteractivePipeline(_ChunkedStepPipeline):
-        def peek_chunk_media(self, state):
-            return ChunkMediaSpec(num_media_frames=12, fps=12.0, num_latent_frames=3)
-
-        def apply_interaction_at_chunk_boundary(self, state):
-            pass
-
-        def prepare_next_chunk(self, state):
-            pass
-
-    runner = _make_runner()
-    runner.od_config.streaming_output = True
-    runner.pipeline = InteractivePipeline()
-    runner._interaction_coordinator = mocker.Mock()
-    runner._interaction_coordinator.maybe_prepare_initial_session.return_value = None
-    forward = mocker.spy(runner.pipeline, "denoise_step")
-    monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)
-    request = _make_step_request(4)
-    request.sampling_params.streaming_buffer_seconds = 0.75
-    output = runner.execute_stepwise(_make_scheduler_output(request)).get_request_output("req-1")
-    assert output.finished
-    assert "must fit a complete media chunk" in output.result.error
-    forward.assert_not_called()
-
-
-@pytest.mark.cpu
 def test_cleanup_wave_releases_last_state_and_batch_without_forward(monkeypatch):
     runner = _make_runner()
     monkeypatch.setattr(model_runner_module, "set_forward_context", _noop_forward_context)

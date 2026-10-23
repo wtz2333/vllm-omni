@@ -470,6 +470,24 @@ def test_pending_streaming_controls_are_bounded_and_keep_original_ingress_time()
     assert engine.track_streaming_interaction("paced", "accepted-after-release") is not None
 
 
+def test_window_smaller_than_two_chunks_still_generates_the_second_chunk():
+    """The gate measures generated media, not the chunk it is about to generate."""
+    from vllm_omni.diffusion.diffusion_engine import _StreamingPlayback
+
+    engine = _make_engine_with_loop(None, start_loop=False)
+    state = _StreamingPlayback(buffer_seconds=1.25)
+    state.generated_seconds = 9 / 16  # first chunk: 0.5625 s, nothing played yet
+    state.next_media_duration = 12 / 16  # 0.75 s, which would project past 1.25 s
+    state.pending_boundary = True
+    state.next_ready_at = time.monotonic() - 1.0
+    engine._streaming_playback = {"paced": state}
+
+    assert not engine._playback_blocked()
+
+    state.generated_seconds += state.next_media_duration  # 1.3125 s is now actually generated
+    assert engine._playback_blocked()
+
+
 def test_internal_pacing_deadline_does_not_start_client_idle_timeout():
     from vllm_omni.diffusion.diffusion_engine import _StreamingPlayback
 
@@ -488,8 +506,7 @@ def test_next_chunk_credit_wait_starts_client_idle_timeout():
 
     engine = _make_engine_with_loop(None, start_loop=False)
     state = _StreamingPlayback(buffer_seconds=1.0, idle_timeout_s=0.01)
-    state.generated_seconds = 0.6
-    state.next_media_duration = 0.6
+    state.generated_seconds = 1.2
     state.pending_boundary = True
     state.next_ready_at = time.monotonic() - 1.0
     engine._streaming_playback = {"paced": state}

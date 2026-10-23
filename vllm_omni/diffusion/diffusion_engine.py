@@ -234,6 +234,7 @@ class _RpcTask:
 @dataclass
 class _StreamingPlayback:
     buffer_seconds: float
+    lead_chunks: int | None = None
     generated_seconds: float = 0.0
     played_seconds: float = 0.0
     boundary_at: float | None = None
@@ -878,8 +879,7 @@ class DiffusionEngine:
                     state.outstanding_chunk is not None
                     or (
                         state.pending_boundary
-                        and state.generated_seconds + state.next_media_duration - state.played_seconds
-                        > state.buffer_seconds + 1e-9
+                        and state.generated_seconds - state.played_seconds > state.buffer_seconds + 1e-9
                     )
                     or (state.pending_boundary and now < state.next_ready_at)
                     or bool(state.pending_actions)
@@ -894,8 +894,7 @@ class DiffusionEngine:
                     client_blocked = state.outstanding_chunk is not None or (
                         state.pending_boundary
                         and now >= state.next_ready_at
-                        and state.generated_seconds + state.next_media_duration - state.played_seconds
-                        > state.buffer_seconds + 1e-9
+                        and state.generated_seconds - state.played_seconds > state.buffer_seconds + 1e-9
                     )
                     if client_blocked:
                         if state.idle_since is None:
@@ -1284,8 +1283,6 @@ class DiffusionEngine:
                     violation = None
                     if output_bytes > playback.max_output_bytes:
                         violation = "Decoded streaming output exceeds streaming_max_output_bytes"
-                    elif req_output.streaming_next_media_duration > playback.buffer_seconds:
-                        violation = "streaming_buffer_seconds must fit a complete media chunk"
                     if violation is not None:
                         self.scheduler.finish_requests(request_id, DiffusionRequestStatus.FINISHED_ERROR)
                         self._cleanup_stepwise_requests([request_id])
@@ -1296,6 +1293,10 @@ class DiffusionEngine:
                         with self._cv:
                             playback.generated_seconds += req_output.streaming_media_duration
                             playback.next_media_duration = req_output.streaming_next_media_duration
+                            if playback.lead_chunks is not None and playback.next_media_duration > 0:
+                                # Whole chunks of lead, in the media the server is
+                                # actually producing rather than a client guess.
+                                playback.buffer_seconds = playback.lead_chunks * playback.next_media_duration
                             if req_output.streaming_media_duration > 0 and playback.boundary_at is not None:
                                 playback.next_ready_at = playback.boundary_at + req_output.streaming_media_duration
                                 playback.pending_boundary = True
@@ -1438,7 +1439,8 @@ class DiffusionEngine:
         """Admit a request whose model-owned preprocessing is complete."""
 
         buffer_seconds = getattr(request.sampling_params, "streaming_buffer_seconds", None)
-        if buffer_seconds is not None:
+        lead_chunks = getattr(request.sampling_params, "streaming_lead_chunks", None)
+        if buffer_seconds is not None or lead_chunks is not None:
             if (
                 not self.od_config.streaming_output
                 or self.execution_mode != DiffusionExecutionMode.STEP_BATCH
@@ -1459,10 +1461,11 @@ class DiffusionEngine:
                     self._request_cancellations.finish(request.request_id)
                     request.cancellation_signal = None
                 raise
-            if buffer_seconds is not None:
+            if buffer_seconds is not None or lead_chunks is not None:
                 assert self._streaming_playback is not None
                 self._streaming_playback[request_id] = _StreamingPlayback(
-                    buffer_seconds,
+                    buffer_seconds if buffer_seconds is not None else 0.0,
+                    lead_chunks=lead_chunks,
                     max_output_bytes=request.sampling_params.streaming_max_output_bytes,
                     idle_timeout_s=request.sampling_params.streaming_idle_timeout_s,
                     output_ack=request.sampling_params.streaming_output_ack,

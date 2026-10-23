@@ -9,6 +9,92 @@ import { readFile } from "node:fs/promises";
 const source = await readFile(new URL("../../../../apps/ComfyUI-vLLM-Omni/web/lingbot-player.js", import.meta.url));
 const { cameraEvent, VideoSession } = await import(`data:text/javascript;base64,${source.toString("base64")}`);
 
+test("an individual interaction failure keeps the video session alive", () => {
+  const reports = [];
+  const video = Object.assign(new EventTarget(), { currentTime: 6.8 });
+  const session = new VideoSession(video, text => reports.push(text));
+  session.ready = true;
+  session.fail = () => assert.fail("单条交互失败不能清空视频");
+  session.control({ type: "error", code: "interaction_failed", event_id: "camera-last", message: "Failed to apply interaction" });
+  assert.equal(session.ready, true);
+  assert.equal(session.done, false);
+  assert.match(reports[0], /camera-last/);
+  assert.match(reports[0], /Failed to apply interaction/);
+});
+
+test("paced playback starts from the first LingBot fragment", (t) => {
+  const original = Object.fromEntries(["window", "location", "MediaSource"].map(key => [key, globalThis[key]]));
+  class Source extends EventTarget {
+    static isTypeSupported() { return true; }
+  }
+  Object.assign(globalThis, { MediaSource: Source, window: { MediaSource: Source }, location: { protocol: "http:" } });
+  t.mock.method(URL, "createObjectURL", () => "blob:first-fragment");
+  t.mock.method(URL, "revokeObjectURL", () => {});
+  let played = 0;
+  const video = Object.assign(new EventTarget(), {
+    currentTime: 0, buffered: { length: 1, end: () => 0.5 },
+    pause() {}, load() {}, removeAttribute() {},
+    play: async () => { played++; },
+  });
+  const session = new VideoSession(video, () => {});
+  try {
+    session.start({ url: "ws://localhost/video", keyboard: true,
+      payload: { type: "session.start", fps: 16, streaming_buffer_seconds: 1.25 } });
+    // 此窗口无法容纳下一块；首个片段必须开始播放，才能释放后续生成额度。
+    session.playWhenBuffered();
+    assert.equal(played, 1);
+    assert.equal(session.playbackStarted, true);
+  } finally {
+    session.dispose();
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  }
+});
+
+test("the panel asks for one chunk of lead, not a seconds constant", async () => {
+  const original = Object.fromEntries(["window", "location", "MediaSource", "WebSocket"].map(k => [k, globalThis[k]]));
+  const sent = [];
+  const createObjectURL = URL.createObjectURL;
+  const revokeObjectURL = URL.revokeObjectURL;
+  class Source extends EventTarget {
+    static isTypeSupported() { return true; }
+    readyState = "open";
+    constructor() {
+      super();
+      queueMicrotask(() => this.dispatchEvent(new Event("sourceopen")));
+    }
+    addSourceBuffer() { return Object.assign(new EventTarget(), { updating: false, buffered: { length: 0 } }); }
+  }
+  class Socket {
+    static OPEN = 1;
+    readyState = 1;
+    constructor() { queueMicrotask(() => this.onopen()); }
+    send(data) { sent.push(JSON.parse(data)); }
+    close() { this.readyState = 3; }
+  }
+  Object.assign(globalThis, { MediaSource: Source, WebSocket: Socket, window: { MediaSource: Source }, location: { protocol: "http:" } });
+  URL.createObjectURL = () => "blob:lead";
+  URL.revokeObjectURL = () => {};
+  const video = Object.assign(new EventTarget(), { currentTime: 0, pause() {}, load() {}, removeAttribute() {}, play: async () => {} });
+  const session = new VideoSession(video, () => {});
+  try {
+    session.start({ url: "ws://localhost/video", keyboard: true, payload: { type: "session.start", fps: 16 } });
+    await new Promise(resolve => setImmediate(resolve));
+    assert.deepEqual(sent[0].streaming_pacing, { enabled: true, lead_chunks: 1 });
+    assert.equal("streaming_buffer_seconds" in sent[0], false);
+  } finally {
+    session.dispose?.();
+    URL.createObjectURL = createObjectURL;
+    URL.revokeObjectURL = revokeObjectURL;
+    for (const [key, value] of Object.entries(original)) {
+      if (value === undefined) delete globalThis[key];
+      else globalThis[key] = value;
+    }
+  }
+});
+
 test("held keys, release, and cancelling opposite directions", () => {
   const camera = keys => cameraEvent(new Set(keys), "test").interaction.event.multi_modal_data.camera;
   assert.deepEqual(camera("w").data.translation, [0, 0, 0.05]);
