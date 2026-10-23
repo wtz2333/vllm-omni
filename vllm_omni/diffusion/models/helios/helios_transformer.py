@@ -715,6 +715,7 @@ class HeliosTransformer3DModel(nn.Module):
         has_multi_term_memory_patch: bool = True,
         is_amplify_history: bool = False,
         history_scale_mode: str = "per_head",
+        use_raw_sink_frames: bool = False,
         quant_config: "QuantizationConfig | None" = None,
     ) -> None:
         super().__init__()
@@ -746,12 +747,14 @@ class HeliosTransformer3DModel(nn.Module):
                 "has_multi_term_memory_patch": has_multi_term_memory_patch,
                 "is_amplify_history": is_amplify_history,
                 "history_scale_mode": history_scale_mode,
+                "use_raw_sink_frames": use_raw_sink_frames,
             },
         )()
 
         self.inner_dim = inner_dim
         self.zero_history_timestep = zero_history_timestep
         self.has_multi_term_memory_patch = has_multi_term_memory_patch
+        self.use_raw_sink_frames = bool(use_raw_sink_frames)
 
         # 1. Patch & position embedding
         self.rope = HeliosRotaryPosEmbed(rope_dim=rope_dim, theta=rope_theta)
@@ -881,6 +884,8 @@ class HeliosTransformer3DModel(nn.Module):
         latents_history_short: torch.Tensor | None = None,
         latents_history_mid: torch.Tensor | None = None,
         latents_history_long: torch.Tensor | None = None,
+        sink_latents: torch.Tensor | None = None,
+        nearby_sink_latents: torch.Tensor | None = None,
         return_dict: bool = True,
         attention_kwargs: dict[str, Any] | None = None,
         conditioning_cache: HeliosConditioningCache | None = None,
@@ -908,6 +913,31 @@ class HeliosTransformer3DModel(nn.Module):
         hidden_states = self._sp_split_seq(hidden_states)
         rotary_emb = self._sp_split_seq(rotary_emb)
         original_context_length = hidden_states.shape[1]
+
+        # Evoke optionally exposes the first sink frame and a nearby memory
+        # window at the native patch resolution.  Helios requests leave these
+        # inputs unset and preserve the original token order.
+        if nearby_sink_latents is not None:
+            if indices_latents_history_short is None:
+                raise ValueError("nearby_sink_latents requires indices_latents_history_short.")
+            nearby = self.patch_embedding(nearby_sink_latents.to(hidden_states))
+            _, _, nearby_frames, nearby_height, nearby_width = nearby.shape
+            nearby_tokens = nearby.flatten(2).transpose(1, 2)
+            nearby_indices = indices_latents_history_short[:, -nearby_frames:].to(nearby.device)
+            nearby_rope = (
+                self.rope(
+                    frame_indices=nearby_indices,
+                    height=nearby_height,
+                    width=nearby_width,
+                    device=nearby.device,
+                )
+                .flatten(2)
+                .transpose(1, 2)
+            )
+            nearby_tokens = self._sp_split_seq(nearby_tokens)
+            nearby_rope = self._sp_split_seq(nearby_rope)
+            hidden_states = torch.cat([nearby_tokens, hidden_states], dim=1)
+            rotary_emb = torch.cat([nearby_rope, rotary_emb], dim=1)
 
         # 2. Process short history latents
         if latents_history_short is not None and indices_latents_history_short is not None:
@@ -975,6 +1005,26 @@ class HeliosTransformer3DModel(nn.Module):
 
             hidden_states = torch.cat([latents_history_long, hidden_states], dim=1)
             rotary_emb = torch.cat([rotary_emb_history_long, rotary_emb], dim=1)
+
+        if sink_latents is not None:
+            sink = self.patch_embedding(sink_latents.to(hidden_states))
+            _, _, sink_frames, sink_height, sink_width = sink.shape
+            sink_tokens = sink.flatten(2).transpose(1, 2)
+            sink_indices = torch.zeros(sink.shape[0], sink_frames, device=sink.device, dtype=torch.long)
+            sink_rope = (
+                self.rope(
+                    frame_indices=sink_indices,
+                    height=sink_height,
+                    width=sink_width,
+                    device=sink.device,
+                )
+                .flatten(2)
+                .transpose(1, 2)
+            )
+            sink_tokens = self._sp_split_seq(sink_tokens)
+            sink_rope = self._sp_split_seq(sink_rope)
+            hidden_states = torch.cat([sink_tokens, hidden_states], dim=1)
+            rotary_emb = torch.cat([sink_rope, rotary_emb], dim=1)
 
         history_context_length = hidden_states.shape[1] - original_context_length
 

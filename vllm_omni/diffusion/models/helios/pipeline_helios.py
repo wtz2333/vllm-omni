@@ -71,6 +71,17 @@ def optimized_scale(positive_flat, negative_flat):
     return st_star
 
 
+def _raw_sink_kwargs(attention_kwargs: dict | None) -> dict[str, Any]:
+    """Forward optional Evoke sink-frame tensors without changing Helios calls."""
+    if not attention_kwargs:
+        return {}
+    return {
+        key: attention_kwargs[key]
+        for key in ("sink_latents", "nearby_sink_latents")
+        if attention_kwargs.get(key) is not None
+    }
+
+
 def load_json_config(model_path: str, subfolder: str, filename: str, local_files_only: bool = True) -> dict:
     """Load a JSON config file from a local path or HuggingFace Hub repo."""
     if local_files_only:
@@ -732,6 +743,7 @@ class HeliosPipeline(
             "attention_kwargs": extra["attention_kwargs"],
             "return_dict": False,
         }
+        transformer_kwargs.update(_raw_sink_kwargs(extra["attention_kwargs"]))
         if extra["use_cfg_zero_star"] and state.do_true_cfg:
             noise_pred = self.transformer(
                 encoder_hidden_states=state.prompt_embeds,
@@ -793,6 +805,7 @@ class HeliosPipeline(
             "attention_kwargs": extra["attention_kwargs"],
             "return_dict": False,
         }
+        transformer_kwargs.update(_raw_sink_kwargs(extra["attention_kwargs"]))
         noise_pred = self.transformer(encoder_hidden_states=state.prompt_embeds, **transformer_kwargs)[0]
         if state.do_true_cfg:
             noise_uncond = self.transformer(
@@ -1407,6 +1420,7 @@ class HeliosPipeline(
                     "attention_kwargs": attention_kwargs,
                     "return_dict": False,
                 }
+                transformer_kwargs.update(_raw_sink_kwargs(attention_kwargs))
 
                 if use_cfg_zero_star and do_true_cfg:
                     noise_pred = self.transformer(
@@ -1573,6 +1587,7 @@ class HeliosPipeline(
                         "attention_kwargs": attention_kwargs,
                         "return_dict": False,
                     }
+                    transformer_kwargs.update(_raw_sink_kwargs(attention_kwargs))
 
                     noise_pred = self.transformer(
                         encoder_hidden_states=prompt_embeds,
