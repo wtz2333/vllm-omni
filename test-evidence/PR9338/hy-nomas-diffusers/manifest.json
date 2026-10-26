@@ -1,0 +1,39 @@
+{
+  "implementation": "257856d3afce694803f83fd60674f292b7a34583",
+  "checkpoint": "tencent/Hy-Nomas-Diffusers@a1ae04d11ae4ea176d1f76de634c115944f9882d",
+  "reference_checkpoint": "tencent/Hy-Nomas@bac719a80c8d02f91c485fca804bb8221e149b70",
+  "reference_runtime": "Tencent-Hunyuan/Hy-Nomas@911cea6458a89c2663513ff7099561ec190dd491",
+  "hardware": "1/2 NVIDIA H200 141 GB, NVLink; driver 570.133.20",
+  "software": {
+    "python": "3.12.13",
+    "torch": "2.13.0+cu130",
+    "vllm": "0.32.0",
+    "diffusers": "0.40.0",
+    "transformers": "5.16.1",
+    "flash-attn": "2.8.3"
+  },
+  "benchmark": {
+    "head": "257856d3afce694803f83fd60674f292b7a34583",
+    "model": "tencent/Hy-Nomas-Diffusers",
+    "model_revision": "a1ae04d11ae4ea176d1f76de634c115944f9882d",
+    "sp": 1,
+    "cpu_offload": false,
+    "prompt": "A forest beside a clear river, photorealistic, daylight, gentle camera motion.",
+    "height": 704,
+    "width": 1280,
+    "frames": 121,
+    "steps": 8,
+    "seed": 42,
+    "fps": 24,
+    "guidance_scale": 1,
+    "flow_shift": 5,
+    "dtype": "bfloat16",
+    "batch": 1,
+    "concurrency": 1,
+    "warmup": 2,
+    "repeats": 5,
+    "timing": "Omni.generate call through complete CPU tensor delivery; excludes loading, metrics RPC, hashes, encoding and disk writes",
+    "memory": "per-rank PyTorch peaks; host process-tree RSS/PSS sampled every second",
+    "load_ms": 67045.30158638954
+  }
+}

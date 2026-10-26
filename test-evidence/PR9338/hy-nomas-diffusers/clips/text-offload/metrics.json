@@ -1,0 +1,20 @@
+{
+  "scenario": "text",
+  "cpu_offload": true,
+  "frames": 49,
+  "shape": [
+    1,
+    3,
+    49,
+    384,
+    640
+  ],
+  "comparison_space": "decoded float pixels before uint8 conversion and MP4 encoding",
+  "mae": 0.0,
+  "mse": 0.0,
+  "max_abs": 0.0,
+  "psnr_db": "Infinity",
+  "mean_frame_ssim": 1.0,
+  "min_frame_ssim": 1.0,
+  "exact": true
+}

@@ -1,0 +1,271 @@
+{
+  "implementation": "257856d3afce694803f83fd60674f292b7a34583",
+  "performance": {
+    "sp1": {
+      "sp": 1,
+      "cpu_offload": false,
+      "n": 5,
+      "median_ms": 30894.731857813895,
+      "mean_ms": 32602.001842856407,
+      "stdev_ms": 7422.252332301675,
+      "min_ms": 26160.076315514743,
+      "max_ms": 44070.19054796547,
+      "nearest_rank_p95_ms": 44070.19054796547,
+      "generation_frames_per_second": 3.71142853691093,
+      "mean_stage_ms": 32599.910593032837,
+      "mean_queue_ms": 0.5450710654258728,
+      "per_rank_peak_allocated_gib": [
+        59.09407043457031
+      ],
+      "per_rank_peak_reserved_gib": [
+        63.3671875
+      ],
+      "sampled_process_tree_peak_pss_gib": 12.92940902709961,
+      "sampled_process_tree_peak_rss_gib": 13.952102661132812,
+      "deterministic": true,
+      "baseline_output_mae": 0.0,
+      "baseline_output_mse": 0.0,
+      "baseline_output_max_abs": 0,
+      "speedup_vs_sp1": 1.0,
+      "latency_reduction_vs_sp1": 0.0
+    },
+    "sp2": {
+      "sp": 2,
+      "cpu_offload": false,
+      "n": 5,
+      "median_ms": 21123.74861445278,
+      "mean_ms": 21173.742550238967,
+      "stdev_ms": 198.24083421846765,
+      "min_ms": 20960.520806722343,
+      "max_ms": 21497.658588923514,
+      "nearest_rank_p95_ms": 21497.658588923514,
+      "generation_frames_per_second": 5.714625069843139,
+      "mean_stage_ms": 21171.33469581604,
+      "mean_queue_ms": 0.5967387929558754,
+      "per_rank_peak_allocated_gib": [
+        53.047566413879395,
+        53.047566413879395
+      ],
+      "per_rank_peak_reserved_gib": [
+        57.060546875,
+        57.060546875
+      ],
+      "sampled_process_tree_peak_pss_gib": 15.322484970092773,
+      "sampled_process_tree_peak_rss_gib": 28.468841552734375,
+      "deterministic": true,
+      "baseline_output_mae": 0.0,
+      "baseline_output_mse": 0.0,
+      "baseline_output_max_abs": 0,
+      "speedup_vs_sp1": 1.4625591518673844,
+      "latency_reduction_vs_sp1": 0.3162669703148706
+    },
+    "sp1_offload": {
+      "sp": 1,
+      "cpu_offload": true,
+      "n": 5,
+      "median_ms": 41248.61263111234,
+      "mean_ms": 41361.15595046431,
+      "stdev_ms": 3601.0047829698146,
+      "min_ms": 37448.11887294054,
+      "max_ms": 46637.90697325021,
+      "nearest_rank_p95_ms": 46637.90697325021,
+      "generation_frames_per_second": 2.925450152914348,
+      "mean_stage_ms": 41358.85910987854,
+      "mean_queue_ms": 0.5175558850169182,
+      "per_rank_peak_allocated_gib": [
+        30.561321258544922
+      ],
+      "per_rank_peak_reserved_gib": [
+        32.07421875
+      ],
+      "sampled_process_tree_peak_pss_gib": 66.61165809631348,
+      "sampled_process_tree_peak_rss_gib": 67.23091506958008,
+      "deterministic": true,
+      "baseline_output_mae": 0.0,
+      "baseline_output_mse": 0.0,
+      "baseline_output_max_abs": 0,
+      "speedup_vs_sp1": 0.7489883874181774,
+      "latency_reduction_vs_sp1": -0.33513418471957834
+    },
+    "sp2_offload": {
+      "sp": 2,
+      "cpu_offload": true,
+      "n": 5,
+      "median_ms": 38466.59531723708,
+      "mean_ms": 39800.57552587241,
+      "stdev_ms": 2961.4647460761726,
+      "min_ms": 37289.00033980608,
+      "max_ms": 44121.61585595459,
+      "nearest_rank_p95_ms": 44121.61585595459,
+      "generation_frames_per_second": 3.0401570429890845,
+      "mean_stage_ms": 39797.74193763733,
+      "mean_queue_ms": 0.783257931470871,
+      "per_rank_peak_allocated_gib": [
+        23.79827880859375,
+        23.79827880859375
+      ],
+      "per_rank_peak_reserved_gib": [
+        25.9921875,
+        25.9921875
+      ],
+      "sampled_process_tree_peak_pss_gib": 128.164794921875,
+      "sampled_process_tree_peak_rss_gib": 128.7927017211914,
+      "deterministic": true,
+      "baseline_output_mae": 0.0,
+      "baseline_output_mse": 0.0,
+      "baseline_output_max_abs": 0,
+      "speedup_vs_sp1": 0.8031574305711898,
+      "latency_reduction_vs_sp1": -0.24508590960656318
+    },
+    "sp1_repeat": {
+      "sp": 1,
+      "cpu_offload": false,
+      "n": 5,
+      "median_ms": 25669.163700193167,
+      "mean_ms": 25693.284529447556,
+      "stdev_ms": 78.63118328089843,
+      "min_ms": 25628.69804725051,
+      "max_ms": 25828.251112252474,
+      "nearest_rank_p95_ms": 25828.251112252474,
+      "generation_frames_per_second": 4.709401784007787,
+      "mean_stage_ms": 25691.210889816284,
+      "mean_queue_ms": 0.5568794906139374,
+      "per_rank_peak_allocated_gib": [
+        59.09407043457031
+      ],
+      "per_rank_peak_reserved_gib": [
+        63.3671875
+      ],
+      "sampled_process_tree_peak_pss_gib": 10.871874809265137,
+      "sampled_process_tree_peak_rss_gib": 11.957664489746094,
+      "deterministic": true,
+      "baseline_output_mae": 0.0,
+      "baseline_output_mse": 0.0,
+      "baseline_output_max_abs": 0,
+      "speedup_vs_sp1": 1.2035737594981095,
+      "latency_reduction_vs_sp1": 0.16914107497906883
+    }
+  },
+  "quality": [
+    {
+      "scenario": "camera",
+      "cpu_offload": true,
+      "frames": 49,
+      "shape": [
+        1,
+        3,
+        49,
+        384,
+        640
+      ],
+      "comparison_space": "decoded float pixels before uint8 conversion and MP4 encoding",
+      "mae": 0.0,
+      "mse": 0.0,
+      "max_abs": 0.0,
+      "psnr_db": "Infinity",
+      "mean_frame_ssim": 1.0,
+      "min_frame_ssim": 1.0,
+      "exact": true
+    },
+    {
+      "scenario": "camera",
+      "cpu_offload": false,
+      "frames": 49,
+      "shape": [
+        1,
+        3,
+        49,
+        384,
+        640
+      ],
+      "comparison_space": "decoded float pixels before uint8 conversion and MP4 encoding",
+      "mae": 0.0,
+      "mse": 0.0,
+      "max_abs": 0.0,
+      "psnr_db": "Infinity",
+      "mean_frame_ssim": 1.0,
+      "min_frame_ssim": 1.0,
+      "exact": true
+    },
+    {
+      "scenario": "segments",
+      "cpu_offload": true,
+      "frames": 49,
+      "shape": [
+        1,
+        3,
+        49,
+        384,
+        640
+      ],
+      "comparison_space": "decoded float pixels before uint8 conversion and MP4 encoding",
+      "mae": 0.0,
+      "mse": 0.0,
+      "max_abs": 0.0,
+      "psnr_db": "Infinity",
+      "mean_frame_ssim": 1.0,
+      "min_frame_ssim": 1.0,
+      "exact": true
+    },
+    {
+      "scenario": "segments",
+      "cpu_offload": false,
+      "frames": 49,
+      "shape": [
+        1,
+        3,
+        49,
+        384,
+        640
+      ],
+      "comparison_space": "decoded float pixels before uint8 conversion and MP4 encoding",
+      "mae": 0.0,
+      "mse": 0.0,
+      "max_abs": 0.0,
+      "psnr_db": "Infinity",
+      "mean_frame_ssim": 1.0,
+      "min_frame_ssim": 1.0,
+      "exact": true
+    },
+    {
+      "scenario": "text",
+      "cpu_offload": true,
+      "frames": 49,
+      "shape": [
+        1,
+        3,
+        49,
+        384,
+        640
+      ],
+      "comparison_space": "decoded float pixels before uint8 conversion and MP4 encoding",
+      "mae": 0.0,
+      "mse": 0.0,
+      "max_abs": 0.0,
+      "psnr_db": "Infinity",
+      "mean_frame_ssim": 1.0,
+      "min_frame_ssim": 1.0,
+      "exact": true
+    },
+    {
+      "scenario": "text",
+      "cpu_offload": false,
+      "frames": 49,
+      "shape": [
+        1,
+        3,
+        49,
+        384,
+        640
+      ],
+      "comparison_space": "decoded float pixels before uint8 conversion and MP4 encoding",
+      "mae": 0.0,
+      "mse": 0.0,
+      "max_abs": 0.0,
+      "psnr_db": "Infinity",
+      "mean_frame_ssim": 1.0,
+      "min_frame_ssim": 1.0,
+      "exact": true
+    }
+  ]
+}
