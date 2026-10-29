@@ -1,0 +1,61 @@
+<!doctype html>
+<html lang='en'><meta charset='utf-8'><meta name='viewport' content='width=device-width'>
+<title>Hy-Nomas PR 9338 evidence</title>
+<style>
+body{font:16px/1.6 system-ui,sans-serif;color:#25313d;background:#f5f7fa;margin:0}
+main{max-width:1120px;margin:auto;padding:32px 20px}
+section,.notice{background:white;padding:20px;border:1px solid #dbe1e8;border-radius:10px;margin:18px 0}
+.notice{border-left:5px solid #c18420;background:#fff9eb}
+table{width:100%;border-collapse:collapse;font-size:14px}
+th,td{text-align:left;vertical-align:top;padding:10px;border-bottom:1px solid #e1e5eb}
+.scroll{overflow:auto}img,video{display:block;max-width:100%;margin:16px auto}video{width:960px}
+a{color:#175f9e}h1,h2,h3{line-height:1.3}
+</style><main>
+<h1>Hy-Nomas: accuracy, generated output and measured performance</h1>
+<p>2026-10-29 · PR #9338 · implementation 209771901 · H200 · BF16</p>
+<div class='notice'><strong>Reported precision passes; late overexposure also occurs upstream.</strong>
+<p>Validated recent budgets: 18/36. The interrupted 72-budget campaign is excluded and was not retried.
+Recent exactness uses equal actual noise; native-RNG controls are separate. One scene and seed were tested.</p></div>
+<section><h2>Reference and entrypoint comparisons</h2>
+<div class='scroll'><table><thead><tr><th>Comparison</th><th>Workload</th><th>Result</th></tr></thead><tbody><tr><td>Full / upstream</td><td>4 and 8 steps; 3×49 frames</td><td>Exact complete latents and pre-codec uint8 video</td></tr><tr><td>Recent / upstream</td><td>Same workload, budget 36; matched actual noise</td><td>Exact at every turn</td></tr><tr><td>Offline AR / realtime</td><td>Full and recent; 129 frames each</td><td>Exact latents/pixels; correct encoded frames/PTS</td></tr><tr><td>Long recent / upstream</td><td>Budgets 18/36; 48×61=2928 frames</td><td>All 48 turns exact; 122 seconds each</td></tr></tbody></table></div>
+<p>704×1280, SP1, resident BF16. Recent comparisons use upstream seg_ar.
+Its 193-frame recent+chunk_ar probe failed in upstream at a cache write; no precision claim covers that combination.</p>
+<p><a href='data/accuracy.json'>Accuracy audit</a> · <a href='data/precodec-hashes.json'>Per-turn hashes</a>
+· <a href='data/manifest.json'>Revisions/software</a></p>
+<img alt='Short reference and Omni output samples' src='media/precision-samples.png'></section>
+<section><h2>Long-horizon appearance</h2>
+<p>The native upstream RNG runs at both budgets also show late brightening, yellowing and distortion.
+The fraction of pre-codec channels ≥250 rises from about 0.0005% in the first five seconds
+to about 20.2% in the last five seconds. This statistic is descriptive, not a perceptual pass threshold.</p>
+<img alt='Upstream native noise, matched reference and Omni over 122 seconds' src='media/long-output-samples.png'>
+<img alt='Pre-codec brightness curves' src='media/brightness.png'>
+<p>At matched actual noise, all 48 Omni turns equal the upstream result. The mechanism remains unresolved.
+The 48-turn rollout is distinct from the 2881-frame WebSocket diagnostic.
+<a href='data/frame-brightness.csv'>Raw frame statistics</a></p></section>
+<section><h2>Current long-stream diagnostic</h2>
+<div class='scroll'><table><thead><tr><th>History budget</th><th>First playable / ms</th><th>E2E / ms</th><th>RTF</th><th>GPU allocated / reserved GiB</th></tr></thead><tbody><tr><td>18</td><td>17175.3</td><td>538357.1</td><td>4.485</td><td>64.80 / 67.40</td></tr><tr><td>36</td><td>19042.5</td><td>554444.1</td><td>4.619</td><td>72.30 / 74.79</td></tr></tbody></table></div>
+<p>Implementation 209771901; SP2, 2881 frames, 4 steps, 20 controls, 24 fps, seed 42.
+One session per budget, no matching warmup excluded. E2E excludes startup and includes controls,
+encoding, IO, client decoding and diagnostics. These are not steady-state benchmark numbers.</p>
+<p><a href='data/long-stream-diagnostic.json'>Timing boundaries, chunk intervals and memory data</a></p></section>
+<section><h2>Historical repeated SDK benchmark</h2>
+<div class='scroll'><table><thead><tr><th>Configuration</th><th>Median / ms</th><th>Mean ± SD / ms</th><th>GPU allocated / reserved GiB</th></tr></thead><tbody><tr><td>sp1</td><td>30894.7</td><td>32602.0 ± 7422.3</td><td>59.09 / 63.37</td></tr><tr><td>sp2</td><td>21123.7</td><td>21173.7 ± 198.2</td><td>53.05 / 57.06</td></tr><tr><td>sp1_offload</td><td>41248.6</td><td>41361.2 ± 3601.0</td><td>30.56 / 32.07</td></tr><tr><td>sp2_offload</td><td>38466.6</td><td>39800.6 ± 2961.5</td><td>23.80 / 25.99</td></tr></tbody></table></div>
+<p>Earlier implementation 257856d3, 121 frames, 8 steps, 2 warmups + 5 measured requests per configuration.
+SDK E2E excludes loading, encoding and IO. The SP1 recheck changed by −16.91% on the shared host.
+These values have not been remeasured on the current bounded-history implementation.</p>
+<p><a href='data/historical-performance.json'>All raw-summary statistics</a></p></section>
+<section><h2>Calculations and implementation boundaries</h2>
+<p>Media duration=frames/24; RTF=E2E/media duration; speedup=baseline median/candidate median.
+The ordinary offline pipeline uses full history. Recent requires an AR session, uses shared video/text
+history and incremental_v1 RNG. The API retains 4n+1 frame validation; realtime fixes total frames at start,
+while typed ticks add turns. Runtime math depends on the pinned reference package.</p>
+<p>This integration covers offline generation and normal realtime output. Production service stress,
+compute-mid-generation cancellation and real blocked TCP sending are outside its acceptance scope.
+GPU CI and a matched SGLang benchmark have not run.</p>
+<p><a href='README.md'>Complete protocol, public reproduction commands and scope</a></p></section>
+<h2>Complete viewing copies</h2>
+<p>Videos are scaled and recompressed. Numerical metrics use original pre-codec outputs.</p>
+<section><h3>Full: upstream / Omni, 147 frames</h3><video controls preload='metadata' src='media/full-comparison.mp4'></video></section><section><h3>Recent: upstream matched noise / Omni, 147 frames</h3><video controls preload='metadata' src='media/recent-comparison.mp4'></video></section><section><h3>Offline AR / realtime, 129 frames</h3><video controls preload='metadata' src='media/offline-realtime-recent.mp4'></video></section><section><h3>Recent-18: matched upstream / Omni, 122 seconds</h3><video controls preload='metadata' src='media/long-matched-18.mp4'></video></section><section><h3>Recent-36: matched upstream / Omni, 122 seconds</h3><video controls preload='metadata' src='media/long-matched-36.mp4'></video></section><section><h3>Upstream native RNG, recent-18, 122 seconds</h3><video controls preload='metadata' src='media/upstream-native-18.mp4'></video></section><section><h3>Upstream native RNG, recent-36, 122 seconds</h3><video controls preload='metadata' src='media/upstream-native-36.mp4'></video></section>
+<p>Source weights: Tencent Hunyuan. Codex assisted with implementation, experiments and reporting.
+Generated media are model outputs for validation.</p>
+</main></html>

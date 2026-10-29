@@ -1,0 +1,2306 @@
+[
+  {
+    "budget": 18,
+    "turn": 0,
+    "source": "reference",
+    "video_shape": [
+      24,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "e885b331234395670fdad741e4ecbb8cc9adadbadcbfc2e0be176fdca39f0731"
+  },
+  {
+    "budget": 18,
+    "turn": 0,
+    "source": "candidate",
+    "video_shape": [
+      24,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "e885b331234395670fdad741e4ecbb8cc9adadbadcbfc2e0be176fdca39f0731"
+  },
+  {
+    "budget": 18,
+    "turn": 1,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c0d02b7426914536f2ce693a0216b4a9a58b5e95f76acafd22160e8de9bd4347"
+  },
+  {
+    "budget": 18,
+    "turn": 1,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c0d02b7426914536f2ce693a0216b4a9a58b5e95f76acafd22160e8de9bd4347"
+  },
+  {
+    "budget": 18,
+    "turn": 2,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "27b12a9a4ae56fde2d52b0a6c68e6b1c050e194af8e2ea463c36f2c207f0c5a8"
+  },
+  {
+    "budget": 18,
+    "turn": 2,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "27b12a9a4ae56fde2d52b0a6c68e6b1c050e194af8e2ea463c36f2c207f0c5a8"
+  },
+  {
+    "budget": 18,
+    "turn": 3,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "6945e63367d157609d7e0809ab4865df277d93625fee6d9731484f24cd626e9c"
+  },
+  {
+    "budget": 18,
+    "turn": 3,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "6945e63367d157609d7e0809ab4865df277d93625fee6d9731484f24cd626e9c"
+  },
+  {
+    "budget": 18,
+    "turn": 4,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "dbbddf69ed2623641b2133722904109409f81e8648984ec20bd4751673686b1b"
+  },
+  {
+    "budget": 18,
+    "turn": 4,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "dbbddf69ed2623641b2133722904109409f81e8648984ec20bd4751673686b1b"
+  },
+  {
+    "budget": 18,
+    "turn": 5,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "05169e1d96a9d51ef0b8c0daf01c7f68a41c383e0b8be2c4b713a03d36fc12eb"
+  },
+  {
+    "budget": 18,
+    "turn": 5,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "05169e1d96a9d51ef0b8c0daf01c7f68a41c383e0b8be2c4b713a03d36fc12eb"
+  },
+  {
+    "budget": 18,
+    "turn": 6,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "48e9e9b0234568dc6ff97572784d6b941b5d7a0b2477e4345cbaea1ac4e3bf85"
+  },
+  {
+    "budget": 18,
+    "turn": 6,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "48e9e9b0234568dc6ff97572784d6b941b5d7a0b2477e4345cbaea1ac4e3bf85"
+  },
+  {
+    "budget": 18,
+    "turn": 7,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "f36130ae9d1c0b85792180d8ac90889bf6598c23b5c88bc146d7e94fbc0a6fe0"
+  },
+  {
+    "budget": 18,
+    "turn": 7,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "f36130ae9d1c0b85792180d8ac90889bf6598c23b5c88bc146d7e94fbc0a6fe0"
+  },
+  {
+    "budget": 18,
+    "turn": 8,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "e338b7e59726047392ce9468a66b821d2d6f7009e903985f59b5bf64e0f2240b"
+  },
+  {
+    "budget": 18,
+    "turn": 8,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "e338b7e59726047392ce9468a66b821d2d6f7009e903985f59b5bf64e0f2240b"
+  },
+  {
+    "budget": 18,
+    "turn": 9,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "9aeebe17004008aca687ca8f2df86ed4e51469b521e6c28704ca97f2d7ec30b7"
+  },
+  {
+    "budget": 18,
+    "turn": 9,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "9aeebe17004008aca687ca8f2df86ed4e51469b521e6c28704ca97f2d7ec30b7"
+  },
+  {
+    "budget": 18,
+    "turn": 10,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "425120d882cb3105e62f32c95c50a033aeaa869e78a3a668ca538b2e64d431d5"
+  },
+  {
+    "budget": 18,
+    "turn": 10,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "425120d882cb3105e62f32c95c50a033aeaa869e78a3a668ca538b2e64d431d5"
+  },
+  {
+    "budget": 18,
+    "turn": 11,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "e9f53fa7bc3f583b25fe6e8e4e2ca62b84424475cb2bb18b0eb9e21fe3b82c3e"
+  },
+  {
+    "budget": 18,
+    "turn": 11,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "e9f53fa7bc3f583b25fe6e8e4e2ca62b84424475cb2bb18b0eb9e21fe3b82c3e"
+  },
+  {
+    "budget": 18,
+    "turn": 12,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "d2773d93ce4800386b43c63fb1fce66cc7ce87ad1a858f1fe48014fde5e0b0d5"
+  },
+  {
+    "budget": 18,
+    "turn": 12,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "d2773d93ce4800386b43c63fb1fce66cc7ce87ad1a858f1fe48014fde5e0b0d5"
+  },
+  {
+    "budget": 18,
+    "turn": 13,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "7662102954c41d1e7a27e3ad69a2ac0b451f545a0af6baae6743d1a4a139becd"
+  },
+  {
+    "budget": 18,
+    "turn": 13,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "7662102954c41d1e7a27e3ad69a2ac0b451f545a0af6baae6743d1a4a139becd"
+  },
+  {
+    "budget": 18,
+    "turn": 14,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "6e5a142d0894a5759e60433f0ffecab09dfdbb9af7eb7226b8d80a4308fda00e"
+  },
+  {
+    "budget": 18,
+    "turn": 14,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "6e5a142d0894a5759e60433f0ffecab09dfdbb9af7eb7226b8d80a4308fda00e"
+  },
+  {
+    "budget": 18,
+    "turn": 15,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "95e5c8c56b6803a62c70ad8a24fb4a66c826373089cdcc04c6468adceaeaffbe"
+  },
+  {
+    "budget": 18,
+    "turn": 15,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "95e5c8c56b6803a62c70ad8a24fb4a66c826373089cdcc04c6468adceaeaffbe"
+  },
+  {
+    "budget": 18,
+    "turn": 16,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "83543b036064dd7ebd0c7b68cdd421642264148e6c8f4beedffe31574d4f4e47"
+  },
+  {
+    "budget": 18,
+    "turn": 16,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "83543b036064dd7ebd0c7b68cdd421642264148e6c8f4beedffe31574d4f4e47"
+  },
+  {
+    "budget": 18,
+    "turn": 17,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "0076bba6a865b49eba9c199662a9d01bf02a2845226fd3ddacc8d7164904a5de"
+  },
+  {
+    "budget": 18,
+    "turn": 17,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "0076bba6a865b49eba9c199662a9d01bf02a2845226fd3ddacc8d7164904a5de"
+  },
+  {
+    "budget": 18,
+    "turn": 18,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "9b94bd1740093fa6572d844f3dcfa359f7d92b0352b94530a1f05fd222b6447f"
+  },
+  {
+    "budget": 18,
+    "turn": 18,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "9b94bd1740093fa6572d844f3dcfa359f7d92b0352b94530a1f05fd222b6447f"
+  },
+  {
+    "budget": 18,
+    "turn": 19,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "0867f7d1a48773e3ee73c5e6d65a87f71abecf8dde125c9b162fd45ad2e4356f"
+  },
+  {
+    "budget": 18,
+    "turn": 19,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "0867f7d1a48773e3ee73c5e6d65a87f71abecf8dde125c9b162fd45ad2e4356f"
+  },
+  {
+    "budget": 18,
+    "turn": 20,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "058a6913d03ebd2b86c156361b4fd1051741250ee92759bdc2cf8df40ac7e6b9"
+  },
+  {
+    "budget": 18,
+    "turn": 20,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "058a6913d03ebd2b86c156361b4fd1051741250ee92759bdc2cf8df40ac7e6b9"
+  },
+  {
+    "budget": 18,
+    "turn": 21,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "7b495b6fe8b0ffc2abb598fd444d27f9271310872bc74cb1be3792c06fe59395"
+  },
+  {
+    "budget": 18,
+    "turn": 21,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "7b495b6fe8b0ffc2abb598fd444d27f9271310872bc74cb1be3792c06fe59395"
+  },
+  {
+    "budget": 18,
+    "turn": 22,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "94f45908d6d6a4dd683193438db6853a60a58af544056a15bafe554a4ddd9069"
+  },
+  {
+    "budget": 18,
+    "turn": 22,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "94f45908d6d6a4dd683193438db6853a60a58af544056a15bafe554a4ddd9069"
+  },
+  {
+    "budget": 18,
+    "turn": 23,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "576c12a4ee70272e7237fa1e1432497756d008c83d7d9f814f02e31ce127cd50"
+  },
+  {
+    "budget": 18,
+    "turn": 23,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "576c12a4ee70272e7237fa1e1432497756d008c83d7d9f814f02e31ce127cd50"
+  },
+  {
+    "budget": 18,
+    "turn": 24,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "1c2eb5ec3ebe259ba0c55b64482797bfec3fb63c23be11de0ebceb416430fe7b"
+  },
+  {
+    "budget": 18,
+    "turn": 24,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "1c2eb5ec3ebe259ba0c55b64482797bfec3fb63c23be11de0ebceb416430fe7b"
+  },
+  {
+    "budget": 18,
+    "turn": 25,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "e3c019abfd02247bf7ee15f53967a166990534e36fcc226605a6f643b3650dc4"
+  },
+  {
+    "budget": 18,
+    "turn": 25,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "e3c019abfd02247bf7ee15f53967a166990534e36fcc226605a6f643b3650dc4"
+  },
+  {
+    "budget": 18,
+    "turn": 26,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "4c338b2dde39ecc06c8b6968e12170ebf2545025cd79f550f89b4a27afc0e8a2"
+  },
+  {
+    "budget": 18,
+    "turn": 26,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "4c338b2dde39ecc06c8b6968e12170ebf2545025cd79f550f89b4a27afc0e8a2"
+  },
+  {
+    "budget": 18,
+    "turn": 27,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "dc1673a82fa36b36ed07de9f673326570fc07f335186ee131023bb7dbd9b4115"
+  },
+  {
+    "budget": 18,
+    "turn": 27,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "dc1673a82fa36b36ed07de9f673326570fc07f335186ee131023bb7dbd9b4115"
+  },
+  {
+    "budget": 18,
+    "turn": 28,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "49cafd65eb36bd1dd4cf883113ad5da5545b9034e3effd162983bd64a3411d5f"
+  },
+  {
+    "budget": 18,
+    "turn": 28,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "49cafd65eb36bd1dd4cf883113ad5da5545b9034e3effd162983bd64a3411d5f"
+  },
+  {
+    "budget": 18,
+    "turn": 29,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "10cb638fb56672a9a53423e01952ff592396c885c329fe63ed6793e92730d481"
+  },
+  {
+    "budget": 18,
+    "turn": 29,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "10cb638fb56672a9a53423e01952ff592396c885c329fe63ed6793e92730d481"
+  },
+  {
+    "budget": 18,
+    "turn": 30,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "ca03770c4a39e86412511c9b98e06e7fc3d65d72ef04a28f5a1f3ba348945c1e"
+  },
+  {
+    "budget": 18,
+    "turn": 30,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "ca03770c4a39e86412511c9b98e06e7fc3d65d72ef04a28f5a1f3ba348945c1e"
+  },
+  {
+    "budget": 18,
+    "turn": 31,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "9da3518fb109602735641577185b3b6b6cd59b7c174ebc4823abb8502f608b4b"
+  },
+  {
+    "budget": 18,
+    "turn": 31,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "9da3518fb109602735641577185b3b6b6cd59b7c174ebc4823abb8502f608b4b"
+  },
+  {
+    "budget": 18,
+    "turn": 32,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "6691cda509bbd3dcdea84c919750cf615bd75cf748fa86e1ee104d10721ddfef"
+  },
+  {
+    "budget": 18,
+    "turn": 32,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "6691cda509bbd3dcdea84c919750cf615bd75cf748fa86e1ee104d10721ddfef"
+  },
+  {
+    "budget": 18,
+    "turn": 33,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "8baa53266c8c6d076b75eaa8e89925293ac0a57329cbd42782acbd909cf36e1e"
+  },
+  {
+    "budget": 18,
+    "turn": 33,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "8baa53266c8c6d076b75eaa8e89925293ac0a57329cbd42782acbd909cf36e1e"
+  },
+  {
+    "budget": 18,
+    "turn": 34,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "cea6eae8ee0ea5e4582976f7b0b459bb462396dc5236d1a9de72b7248493dbf0"
+  },
+  {
+    "budget": 18,
+    "turn": 34,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "cea6eae8ee0ea5e4582976f7b0b459bb462396dc5236d1a9de72b7248493dbf0"
+  },
+  {
+    "budget": 18,
+    "turn": 35,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "ac43535c57b0126bd5069b6c7ccd2b81a02ae61efb6c477ab8085e9c13c0e019"
+  },
+  {
+    "budget": 18,
+    "turn": 35,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "ac43535c57b0126bd5069b6c7ccd2b81a02ae61efb6c477ab8085e9c13c0e019"
+  },
+  {
+    "budget": 18,
+    "turn": 36,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "101315c4f1b99d40310c186473a856fa3287a93b26140904784735a25b144e69"
+  },
+  {
+    "budget": 18,
+    "turn": 36,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "101315c4f1b99d40310c186473a856fa3287a93b26140904784735a25b144e69"
+  },
+  {
+    "budget": 18,
+    "turn": 37,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "e03eecdd8d14bb0be36a17d9fcd46e2dfff482aabbd4640d29467b9ae5fbf624"
+  },
+  {
+    "budget": 18,
+    "turn": 37,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "e03eecdd8d14bb0be36a17d9fcd46e2dfff482aabbd4640d29467b9ae5fbf624"
+  },
+  {
+    "budget": 18,
+    "turn": 38,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "787bf79ce1091f60ef3f4c431f5e4fd36f2ecf5a88459ff17cabe52683151b01"
+  },
+  {
+    "budget": 18,
+    "turn": 38,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "787bf79ce1091f60ef3f4c431f5e4fd36f2ecf5a88459ff17cabe52683151b01"
+  },
+  {
+    "budget": 18,
+    "turn": 39,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "0ed2803ee438f051e6640f0af44f206cdef3f745023dd186ed43e437180d19ba"
+  },
+  {
+    "budget": 18,
+    "turn": 39,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "0ed2803ee438f051e6640f0af44f206cdef3f745023dd186ed43e437180d19ba"
+  },
+  {
+    "budget": 18,
+    "turn": 40,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "fef615ac47346bc7cca681b13135c45bf05ef22d23ad844e129f0617d3478e74"
+  },
+  {
+    "budget": 18,
+    "turn": 40,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "fef615ac47346bc7cca681b13135c45bf05ef22d23ad844e129f0617d3478e74"
+  },
+  {
+    "budget": 18,
+    "turn": 41,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c7a05cd07ce7fa25aeeac8dca29df6546036861b2261c5f315d4519d60fe52f3"
+  },
+  {
+    "budget": 18,
+    "turn": 41,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c7a05cd07ce7fa25aeeac8dca29df6546036861b2261c5f315d4519d60fe52f3"
+  },
+  {
+    "budget": 18,
+    "turn": 42,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "6c73491aea229052aacccfe027a16b4b6afbe0fff8afcf10242b60f1da61ebc4"
+  },
+  {
+    "budget": 18,
+    "turn": 42,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "6c73491aea229052aacccfe027a16b4b6afbe0fff8afcf10242b60f1da61ebc4"
+  },
+  {
+    "budget": 18,
+    "turn": 43,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "af36d65b9ea343b27f6b557d8373dbaa91ded0c101eb0b32e67cac7c743c2d92"
+  },
+  {
+    "budget": 18,
+    "turn": 43,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "af36d65b9ea343b27f6b557d8373dbaa91ded0c101eb0b32e67cac7c743c2d92"
+  },
+  {
+    "budget": 18,
+    "turn": 44,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "fd57df6e4753acfdbe43276b080adb9452256b63c7f305432bc580867227d09e"
+  },
+  {
+    "budget": 18,
+    "turn": 44,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "fd57df6e4753acfdbe43276b080adb9452256b63c7f305432bc580867227d09e"
+  },
+  {
+    "budget": 18,
+    "turn": 45,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "17cc2005b75c1774450594aa27d529147e8f0984abf22b551496624995723cff"
+  },
+  {
+    "budget": 18,
+    "turn": 45,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "17cc2005b75c1774450594aa27d529147e8f0984abf22b551496624995723cff"
+  },
+  {
+    "budget": 18,
+    "turn": 46,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "20302da1d835d2d6b1c5c714eb6d6ab4b4620c4b513560a2738952c1cb6051cf"
+  },
+  {
+    "budget": 18,
+    "turn": 46,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "20302da1d835d2d6b1c5c714eb6d6ab4b4620c4b513560a2738952c1cb6051cf"
+  },
+  {
+    "budget": 18,
+    "turn": 47,
+    "source": "reference",
+    "video_shape": [
+      98,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "58ca57ef9c8b629acd8fffd39b5a7bf313b4ed2df97e8f4026c1c0cd90bd5a4e"
+  },
+  {
+    "budget": 18,
+    "turn": 47,
+    "source": "candidate",
+    "video_shape": [
+      98,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "58ca57ef9c8b629acd8fffd39b5a7bf313b4ed2df97e8f4026c1c0cd90bd5a4e"
+  },
+  {
+    "budget": 36,
+    "turn": 0,
+    "source": "reference",
+    "video_shape": [
+      24,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "e885b331234395670fdad741e4ecbb8cc9adadbadcbfc2e0be176fdca39f0731"
+  },
+  {
+    "budget": 36,
+    "turn": 0,
+    "source": "candidate",
+    "video_shape": [
+      24,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "e885b331234395670fdad741e4ecbb8cc9adadbadcbfc2e0be176fdca39f0731"
+  },
+  {
+    "budget": 36,
+    "turn": 1,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c0d02b7426914536f2ce693a0216b4a9a58b5e95f76acafd22160e8de9bd4347"
+  },
+  {
+    "budget": 36,
+    "turn": 1,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c0d02b7426914536f2ce693a0216b4a9a58b5e95f76acafd22160e8de9bd4347"
+  },
+  {
+    "budget": 36,
+    "turn": 2,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "7f9937d3db9fd74d03c9c75155a2d759d29c034a1e40a3a85e20d733f28a6e79"
+  },
+  {
+    "budget": 36,
+    "turn": 2,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "7f9937d3db9fd74d03c9c75155a2d759d29c034a1e40a3a85e20d733f28a6e79"
+  },
+  {
+    "budget": 36,
+    "turn": 3,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "8fdedd42237e47984316567b48ac484690be72208b9e748c5286c5459b190780"
+  },
+  {
+    "budget": 36,
+    "turn": 3,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "8fdedd42237e47984316567b48ac484690be72208b9e748c5286c5459b190780"
+  },
+  {
+    "budget": 36,
+    "turn": 4,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c44839fbc2799a680b407a79abc67c267ac925cd71a9e032e37a6bdd06a76a55"
+  },
+  {
+    "budget": 36,
+    "turn": 4,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c44839fbc2799a680b407a79abc67c267ac925cd71a9e032e37a6bdd06a76a55"
+  },
+  {
+    "budget": 36,
+    "turn": 5,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "9adf2d4672179cdd77a43c31efcd70cdfcc89870e55abe82163281b059d30381"
+  },
+  {
+    "budget": 36,
+    "turn": 5,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "9adf2d4672179cdd77a43c31efcd70cdfcc89870e55abe82163281b059d30381"
+  },
+  {
+    "budget": 36,
+    "turn": 6,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "7331083a6a0d0a6ac52f69d394cef429e2acbf6af25cf17fc338ebf774fbc96d"
+  },
+  {
+    "budget": 36,
+    "turn": 6,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "7331083a6a0d0a6ac52f69d394cef429e2acbf6af25cf17fc338ebf774fbc96d"
+  },
+  {
+    "budget": 36,
+    "turn": 7,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "f706c7145cd69853b72e3a1d28f4a2484a7a8c6e35d817d771373abe7914648e"
+  },
+  {
+    "budget": 36,
+    "turn": 7,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "f706c7145cd69853b72e3a1d28f4a2484a7a8c6e35d817d771373abe7914648e"
+  },
+  {
+    "budget": 36,
+    "turn": 8,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "55a3e508da2cd72304971b75757935fea1f4b5a5faca524b69f33b1bb3e6eaee"
+  },
+  {
+    "budget": 36,
+    "turn": 8,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "55a3e508da2cd72304971b75757935fea1f4b5a5faca524b69f33b1bb3e6eaee"
+  },
+  {
+    "budget": 36,
+    "turn": 9,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "7fb7ba67857eea2c4494cf1630bb9c6b6f09151bf74d4901605b0bfeccd9e63c"
+  },
+  {
+    "budget": 36,
+    "turn": 9,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "7fb7ba67857eea2c4494cf1630bb9c6b6f09151bf74d4901605b0bfeccd9e63c"
+  },
+  {
+    "budget": 36,
+    "turn": 10,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "2810d665a3fcec07f86faa74afbb9336309b98562617b1229a8c2d66b45e856d"
+  },
+  {
+    "budget": 36,
+    "turn": 10,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "2810d665a3fcec07f86faa74afbb9336309b98562617b1229a8c2d66b45e856d"
+  },
+  {
+    "budget": 36,
+    "turn": 11,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "85a69ef46b97e479108a4bbeae273f8beb018926264c80130516df2b2052d8fd"
+  },
+  {
+    "budget": 36,
+    "turn": 11,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "85a69ef46b97e479108a4bbeae273f8beb018926264c80130516df2b2052d8fd"
+  },
+  {
+    "budget": 36,
+    "turn": 12,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "94340c0a65a8b56d74a98a4c1fbae0a797cf8f4e2610125c5e17cc860664d620"
+  },
+  {
+    "budget": 36,
+    "turn": 12,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "94340c0a65a8b56d74a98a4c1fbae0a797cf8f4e2610125c5e17cc860664d620"
+  },
+  {
+    "budget": 36,
+    "turn": 13,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "aaff3baa5657ef3d8c5709cf9ccf78d293c1c4f1dbfb32ecbbdc9e4584212c60"
+  },
+  {
+    "budget": 36,
+    "turn": 13,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "aaff3baa5657ef3d8c5709cf9ccf78d293c1c4f1dbfb32ecbbdc9e4584212c60"
+  },
+  {
+    "budget": 36,
+    "turn": 14,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c7efe6c8b8b5f0e47b749326ccaf8a2a36b0ce9a16cc0eab297bbc8bf443a75f"
+  },
+  {
+    "budget": 36,
+    "turn": 14,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c7efe6c8b8b5f0e47b749326ccaf8a2a36b0ce9a16cc0eab297bbc8bf443a75f"
+  },
+  {
+    "budget": 36,
+    "turn": 15,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "6bde0f723c6144877ca07396ea1c97623df65e0753ea7a2e147dddfc2396ca6d"
+  },
+  {
+    "budget": 36,
+    "turn": 15,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "6bde0f723c6144877ca07396ea1c97623df65e0753ea7a2e147dddfc2396ca6d"
+  },
+  {
+    "budget": 36,
+    "turn": 16,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "947ffc6c58e024fe82a285d2a62fee72ee30f0e422e8e456288f6ab51a9e9533"
+  },
+  {
+    "budget": 36,
+    "turn": 16,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "947ffc6c58e024fe82a285d2a62fee72ee30f0e422e8e456288f6ab51a9e9533"
+  },
+  {
+    "budget": 36,
+    "turn": 17,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "a5e605ec6992e14c3ec459f778ef8beff77d62b1b92dcdfcfdee8172daf92d6b"
+  },
+  {
+    "budget": 36,
+    "turn": 17,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "a5e605ec6992e14c3ec459f778ef8beff77d62b1b92dcdfcfdee8172daf92d6b"
+  },
+  {
+    "budget": 36,
+    "turn": 18,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "de959418c1d7b7f6b074b7caa3223f3ace7e58326bc82d074f01cc2d36d396a5"
+  },
+  {
+    "budget": 36,
+    "turn": 18,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "de959418c1d7b7f6b074b7caa3223f3ace7e58326bc82d074f01cc2d36d396a5"
+  },
+  {
+    "budget": 36,
+    "turn": 19,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c649d23db690702d04c013a8dd624afc2d5f7be8be423e7c25e2724eb9e00f0a"
+  },
+  {
+    "budget": 36,
+    "turn": 19,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c649d23db690702d04c013a8dd624afc2d5f7be8be423e7c25e2724eb9e00f0a"
+  },
+  {
+    "budget": 36,
+    "turn": 20,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "ded3e7f936b279829759f382c2f99fee48024691d98cbfbd501401da863103ae"
+  },
+  {
+    "budget": 36,
+    "turn": 20,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "ded3e7f936b279829759f382c2f99fee48024691d98cbfbd501401da863103ae"
+  },
+  {
+    "budget": 36,
+    "turn": 21,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c2d241514dd9ff0a5106df8e4010c9810b059c59f73889cd6d019a2b05a53663"
+  },
+  {
+    "budget": 36,
+    "turn": 21,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c2d241514dd9ff0a5106df8e4010c9810b059c59f73889cd6d019a2b05a53663"
+  },
+  {
+    "budget": 36,
+    "turn": 22,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "aa23c713d753e0acdf13cbef3beded4027154efd27e06ff153d8469012a7c53e"
+  },
+  {
+    "budget": 36,
+    "turn": 22,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "aa23c713d753e0acdf13cbef3beded4027154efd27e06ff153d8469012a7c53e"
+  },
+  {
+    "budget": 36,
+    "turn": 23,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "947837a63ed53177527b0e03ca74d67007d17f261c605b876895d13bd98d9ef8"
+  },
+  {
+    "budget": 36,
+    "turn": 23,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "947837a63ed53177527b0e03ca74d67007d17f261c605b876895d13bd98d9ef8"
+  },
+  {
+    "budget": 36,
+    "turn": 24,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "f5714234efe485d57e31a9b4e34b13eb1917965a3fb759e7fe803ff4adfc2d6f"
+  },
+  {
+    "budget": 36,
+    "turn": 24,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "f5714234efe485d57e31a9b4e34b13eb1917965a3fb759e7fe803ff4adfc2d6f"
+  },
+  {
+    "budget": 36,
+    "turn": 25,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "d6e893b074a5cc5d069b525b88bcedc8e19beb2c0926098a5da8f64c0aad7038"
+  },
+  {
+    "budget": 36,
+    "turn": 25,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "d6e893b074a5cc5d069b525b88bcedc8e19beb2c0926098a5da8f64c0aad7038"
+  },
+  {
+    "budget": 36,
+    "turn": 26,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "3120cc6de8e96f55d4b26d1dc53b3218c5973978103d22abc1bd1bcdd844a3f0"
+  },
+  {
+    "budget": 36,
+    "turn": 26,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "3120cc6de8e96f55d4b26d1dc53b3218c5973978103d22abc1bd1bcdd844a3f0"
+  },
+  {
+    "budget": 36,
+    "turn": 27,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "6ee2bbfc6d4016f2a7a7384c3bcf2f56f9cd933bcca080d0d2367a6a0f2bfb48"
+  },
+  {
+    "budget": 36,
+    "turn": 27,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "6ee2bbfc6d4016f2a7a7384c3bcf2f56f9cd933bcca080d0d2367a6a0f2bfb48"
+  },
+  {
+    "budget": 36,
+    "turn": 28,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "decd778e716937f764b179b1d401e1d2a4dfa2136dc2954479ee64d1efc5c802"
+  },
+  {
+    "budget": 36,
+    "turn": 28,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "decd778e716937f764b179b1d401e1d2a4dfa2136dc2954479ee64d1efc5c802"
+  },
+  {
+    "budget": 36,
+    "turn": 29,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "8dd9af4dc502f6f3ea31ae301f224534196cf387eedd9111eaa4e8356970172f"
+  },
+  {
+    "budget": 36,
+    "turn": 29,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "8dd9af4dc502f6f3ea31ae301f224534196cf387eedd9111eaa4e8356970172f"
+  },
+  {
+    "budget": 36,
+    "turn": 30,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "edb69c8c5f799973965dba2aff08f21f4c12cad7f9fb349832d12c9694268452"
+  },
+  {
+    "budget": 36,
+    "turn": 30,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "edb69c8c5f799973965dba2aff08f21f4c12cad7f9fb349832d12c9694268452"
+  },
+  {
+    "budget": 36,
+    "turn": 31,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "00638ef14fec2b1a5b57d2feeb1ee324c00bd53d5747a22b83959e85040cbf7b"
+  },
+  {
+    "budget": 36,
+    "turn": 31,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "00638ef14fec2b1a5b57d2feeb1ee324c00bd53d5747a22b83959e85040cbf7b"
+  },
+  {
+    "budget": 36,
+    "turn": 32,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "ad936188bbcf652103114e3e2aff29cee174e138291d844a59276590e77a0e8e"
+  },
+  {
+    "budget": 36,
+    "turn": 32,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "ad936188bbcf652103114e3e2aff29cee174e138291d844a59276590e77a0e8e"
+  },
+  {
+    "budget": 36,
+    "turn": 33,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "406ecf7df6b070fecf2b364955eeb97e55790258913ca2ea021dfb6b26ebb0fc"
+  },
+  {
+    "budget": 36,
+    "turn": 33,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "406ecf7df6b070fecf2b364955eeb97e55790258913ca2ea021dfb6b26ebb0fc"
+  },
+  {
+    "budget": 36,
+    "turn": 34,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "08a9eabf36676afa52eebe547bb3ff346dc849bd0322bbc7ab43ec2ead0c7b4d"
+  },
+  {
+    "budget": 36,
+    "turn": 34,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "08a9eabf36676afa52eebe547bb3ff346dc849bd0322bbc7ab43ec2ead0c7b4d"
+  },
+  {
+    "budget": 36,
+    "turn": 35,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c787247d32969ae7e73bc4e3bc81127592d00cd7c3c7beec1ae204bcf103fd33"
+  },
+  {
+    "budget": 36,
+    "turn": 35,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "c787247d32969ae7e73bc4e3bc81127592d00cd7c3c7beec1ae204bcf103fd33"
+  },
+  {
+    "budget": 36,
+    "turn": 36,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "9bc41477cabf4ccec2d0228a6438b6239f3c8b3f16120936496b7f187cc85414"
+  },
+  {
+    "budget": 36,
+    "turn": 36,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "9bc41477cabf4ccec2d0228a6438b6239f3c8b3f16120936496b7f187cc85414"
+  },
+  {
+    "budget": 36,
+    "turn": 37,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "a559856803c7dc646f59da26d41f699a51a102b325f99fe89217f9f20dbe30f6"
+  },
+  {
+    "budget": 36,
+    "turn": 37,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "a559856803c7dc646f59da26d41f699a51a102b325f99fe89217f9f20dbe30f6"
+  },
+  {
+    "budget": 36,
+    "turn": 38,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "751a1b634d065bbdf050da11b265213cfc8e7f06f12fab9d7990c693c13897f6"
+  },
+  {
+    "budget": 36,
+    "turn": 38,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "751a1b634d065bbdf050da11b265213cfc8e7f06f12fab9d7990c693c13897f6"
+  },
+  {
+    "budget": 36,
+    "turn": 39,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "05d72e86f8e93b23ffe5cc3693f593343a9da3f300c8a7a25b6c446bcad4984b"
+  },
+  {
+    "budget": 36,
+    "turn": 39,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "05d72e86f8e93b23ffe5cc3693f593343a9da3f300c8a7a25b6c446bcad4984b"
+  },
+  {
+    "budget": 36,
+    "turn": 40,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "2ee1b25fb61b661e01e54dabb8e056aea2d1a95df118c889f9641d7bb73fa685"
+  },
+  {
+    "budget": 36,
+    "turn": 40,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "2ee1b25fb61b661e01e54dabb8e056aea2d1a95df118c889f9641d7bb73fa685"
+  },
+  {
+    "budget": 36,
+    "turn": 41,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "b3606f3c9591282213ee92078b57fffdf54628f44cd03ca7228ff57b72aaf5ae"
+  },
+  {
+    "budget": 36,
+    "turn": 41,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "b3606f3c9591282213ee92078b57fffdf54628f44cd03ca7228ff57b72aaf5ae"
+  },
+  {
+    "budget": 36,
+    "turn": 42,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "ba6e05e2f02f3f89946cf4c4f2597c8cec7ea0819bcde50c7e0a0bd964e45851"
+  },
+  {
+    "budget": 36,
+    "turn": 42,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "ba6e05e2f02f3f89946cf4c4f2597c8cec7ea0819bcde50c7e0a0bd964e45851"
+  },
+  {
+    "budget": 36,
+    "turn": 43,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "cbc6f292d478eb0948a08cfbf10442da42eff1a10df101af997dc206e04d59c7"
+  },
+  {
+    "budget": 36,
+    "turn": 43,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "cbc6f292d478eb0948a08cfbf10442da42eff1a10df101af997dc206e04d59c7"
+  },
+  {
+    "budget": 36,
+    "turn": 44,
+    "source": "reference",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "0755da8bfb3f62524cca2f6f8d595003cd60706c9a9d20cd7545a3361f7e244e"
+  },
+  {
+    "budget": 36,
+    "turn": 44,
+    "source": "candidate",
+    "video_shape": [
+      65,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "0755da8bfb3f62524cca2f6f8d595003cd60706c9a9d20cd7545a3361f7e244e"
+  },
+  {
+    "budget": 36,
+    "turn": 45,
+    "source": "reference",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "5c3a2c7aa3cce3d0a6bc71884ba8c89a3c8f94583be9dddb61a1404f6bbe3d11"
+  },
+  {
+    "budget": 36,
+    "turn": 45,
+    "source": "candidate",
+    "video_shape": [
+      57,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "5c3a2c7aa3cce3d0a6bc71884ba8c89a3c8f94583be9dddb61a1404f6bbe3d11"
+  },
+  {
+    "budget": 36,
+    "turn": 46,
+    "source": "reference",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "fafcea8d9113eeddaf6e2f2d39f41db93ecdb771c084f6834ab26605a82b0569"
+  },
+  {
+    "budget": 36,
+    "turn": 46,
+    "source": "candidate",
+    "video_shape": [
+      61,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "fafcea8d9113eeddaf6e2f2d39f41db93ecdb771c084f6834ab26605a82b0569"
+  },
+  {
+    "budget": 36,
+    "turn": 47,
+    "source": "reference",
+    "video_shape": [
+      98,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "9b3527cea9adcee001d5c3b18a6b9fba5ca36921c0edbf0470cd28bd45d6c2fd"
+  },
+  {
+    "budget": 36,
+    "turn": 47,
+    "source": "candidate",
+    "video_shape": [
+      98,
+      704,
+      1280,
+      3
+    ],
+    "precodec_video_sha256": "9b3527cea9adcee001d5c3b18a6b9fba5ca36921c0edbf0470cd28bd45d6c2fd"
+  }
+]

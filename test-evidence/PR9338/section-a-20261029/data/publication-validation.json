@@ -1,0 +1,64 @@
+{
+  "all_media_frames_and_pts_valid": true,
+  "no_private_host_paths": true,
+  "parity_and_capture_ast_unchanged": true,
+  "relative_html_links_valid": true,
+  "media": [
+    {
+      "file": "media/full-comparison.mp4",
+      "frames": 147,
+      "width": 1280,
+      "height": 352,
+      "fps": 24,
+      "sha256": "030d182af5e8f097228fbb713f98894650fa730a892c6aeef4c1da1731444e5f"
+    },
+    {
+      "file": "media/recent-comparison.mp4",
+      "frames": 147,
+      "width": 1280,
+      "height": 352,
+      "fps": 24,
+      "sha256": "0b6584cf85f8d609686f4a6d4947b65a2087bcdd10b93e917c4a34ea04347db1"
+    },
+    {
+      "file": "media/offline-realtime-recent.mp4",
+      "frames": 129,
+      "width": 1280,
+      "height": 352,
+      "fps": 24,
+      "sha256": "46d0eb09c70567c00dc807612dcff78dd8c76e19d4b68c72502e7f87fd16193a"
+    },
+    {
+      "file": "media/long-matched-18.mp4",
+      "frames": 2928,
+      "width": 960,
+      "height": 264,
+      "fps": 24,
+      "sha256": "e47a233e978f969ee25e8d98fae365b4941c4ea36fdd093196095f49ad461045"
+    },
+    {
+      "file": "media/long-matched-36.mp4",
+      "frames": 2928,
+      "width": 960,
+      "height": 264,
+      "fps": 24,
+      "sha256": "1b9fe149cfb8bddecf82dc21705494866ef79fb5600b667e2720d4114b5bc5c0"
+    },
+    {
+      "file": "media/upstream-native-18.mp4",
+      "frames": 2928,
+      "width": 640,
+      "height": 352,
+      "fps": 24,
+      "sha256": "9b5b083a921fdf54489b253fbf44f8c28bb1942737335cf667ad19c8617aee42"
+    },
+    {
+      "file": "media/upstream-native-36.mp4",
+      "frames": 2928,
+      "width": 640,
+      "height": 352,
+      "fps": 24,
+      "sha256": "c047cd8808616683efe82c13398ba1b5d8d4dcaea8dc1362762beb252ae4a875"
+    }
+  ]
+}

@@ -1,0 +1,146 @@
+{
+  "processes_recorded_success": 27,
+  "planned_processes": 30,
+  "complete_marker_exists": false,
+  "changed_recorded_scripts": [],
+  "accuracy": [
+    {
+      "case": "full-4step",
+      "turns": 3,
+      "frames": 147,
+      "latent_max_abs": 0.0,
+      "video_exact": true
+    },
+    {
+      "case": "full-8step",
+      "turns": 3,
+      "frames": 147,
+      "latent_max_abs": 0.0,
+      "video_exact": true
+    },
+    {
+      "case": "recent-4step",
+      "turns": 3,
+      "frames": 147,
+      "latent_max_abs": 0.0,
+      "video_exact": true
+    },
+    {
+      "case": "recent-8step",
+      "turns": 3,
+      "frames": 147,
+      "latent_max_abs": 0.0,
+      "video_exact": true
+    }
+  ],
+  "transport": [
+    {
+      "case": "transport-704-full",
+      "frames": 129,
+      "chunks": 2,
+      "latents_exact": true,
+      "video_exact": true
+    },
+    {
+      "case": "transport-704-recent",
+      "frames": 129,
+      "chunks": 2,
+      "latents_exact": true,
+      "video_exact": true
+    }
+  ],
+  "long_cases": [
+    {
+      "budget": 18,
+      "reference_matched": {
+        "turns": 48,
+        "frames": 2928,
+        "seconds": 122.0,
+        "first_5s_mean": 85.08013468424478,
+        "last_5s_mean": 145.9316989320697,
+        "first_5s_near_white_channel_percent": 1.0248456242108588,
+        "last_5s_near_white_channel_percent": 15.726191973445392,
+        "maximum_frame_mean": 175.72364021070075,
+        "maximum_frame_near_white_channel_percent": 37.3446747750947
+      },
+      "candidate": {
+        "turns": 48,
+        "frames": 2928,
+        "seconds": 122.0,
+        "first_5s_mean": 85.08013468424478,
+        "last_5s_mean": 145.9316989320697,
+        "first_5s_near_white_channel_percent": 1.0248456242108588,
+        "last_5s_near_white_channel_percent": 15.726191973445392,
+        "maximum_frame_mean": 175.72364021070075,
+        "maximum_frame_near_white_channel_percent": 37.3446747750947
+      },
+      "reference_native": {
+        "turns": 48,
+        "frames": 2928,
+        "seconds": 122.0,
+        "first_5s_mean": 98.28027818159623,
+        "last_5s_mean": 134.38888405231515,
+        "first_5s_near_white_channel_percent": 0.0005200318615845959,
+        "last_5s_near_white_channel_percent": 20.18385669438526,
+        "maximum_frame_mean": 174.05580536813446,
+        "maximum_frame_near_white_channel_percent": 29.0725615530303
+      },
+      "independent_pair_audit": {
+        "checked_turns": 48,
+        "all_latents_exact": true,
+        "all_video_exact": true,
+        "mismatch_turns": []
+      },
+      "completed_comparison": true
+    },
+    {
+      "budget": 36,
+      "reference_matched": {
+        "turns": 48,
+        "frames": 2928,
+        "seconds": 122.0,
+        "first_5s_mean": 85.07970875441424,
+        "last_5s_mean": 149.41031361281273,
+        "first_5s_near_white_channel_percent": 1.0197427152383207,
+        "last_5s_near_white_channel_percent": 16.35228598238242,
+        "maximum_frame_mean": 180.99281116832387,
+        "maximum_frame_near_white_channel_percent": 33.88202089251894
+      },
+      "candidate": {
+        "turns": 48,
+        "frames": 2928,
+        "seconds": 122.0,
+        "first_5s_mean": 85.07970875441424,
+        "last_5s_mean": 149.41031361281273,
+        "first_5s_near_white_channel_percent": 1.0197427152383207,
+        "last_5s_near_white_channel_percent": 16.35228598238242,
+        "maximum_frame_mean": 180.99281116832387,
+        "maximum_frame_near_white_channel_percent": 33.88202089251894
+      },
+      "reference_native": {
+        "turns": 48,
+        "frames": 2928,
+        "seconds": 122.0,
+        "first_5s_mean": 98.28513916015623,
+        "last_5s_mean": 149.36438098637743,
+        "first_5s_near_white_channel_percent": 0.000516332761205808,
+        "last_5s_near_white_channel_percent": 20.174433852687027,
+        "maximum_frame_mean": 181.0296719637784,
+        "maximum_frame_near_white_channel_percent": 35.87391246448864
+      },
+      "independent_pair_audit": {
+        "checked_turns": 48,
+        "all_latents_exact": true,
+        "all_video_exact": true,
+        "mismatch_turns": []
+      },
+      "completed_comparison": true
+    }
+  ],
+  "overall": "Reported 18/36 comparisons passed; 72 qualification is incomplete and excluded",
+  "appearance_scope": "Pre-codec uint8 channel means and channel>=250 fractions; descriptive, not a quality threshold",
+  "unqualified": {
+    "budget": 72,
+    "status": "interrupted and not retried; no full accuracy claim"
+  }
+}

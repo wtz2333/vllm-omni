@@ -1,0 +1,48 @@
+{
+  "history": "full",
+  "noise": "native",
+  "records": [
+    {
+      "turn": 0,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 1,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 2,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    }
+  ]
+}

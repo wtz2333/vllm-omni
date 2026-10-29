@@ -1,0 +1,168 @@
+{
+  "scope": "One diagnostic session per budget; no matched warmup excluded; timings include encoding, IO, client decode and worker diagnostics",
+  "first_chunk_equal_across_budgets": true,
+  "control_application_chunks_equal": true,
+  "results": [
+    {
+      "history_budget": 18,
+      "frames": 2881,
+      "media_seconds": 120.04166666666667,
+      "e2e_seconds": 538.3570554358885,
+      "rtf": 4.484751589885915,
+      "first_playable_frame_seconds": 17.175319543108344,
+      "chunk_intervals": [
+        {
+          "region": "early",
+          "samples": 15,
+          "p50_seconds": 12.17918100580573,
+          "p95_seconds": 17.126151415519416
+        },
+        {
+          "region": "middle",
+          "samples": 15,
+          "p50_seconds": 11.417093995027244,
+          "p95_seconds": 13.943690441548824
+        },
+        {
+          "region": "late",
+          "samples": 15,
+          "p50_seconds": 10.802550255320966,
+          "p95_seconds": 19.43969482090324
+        }
+      ],
+      "control_application_chunks": {
+        "control-00": 3,
+        "control-01": 5,
+        "control-02": 7,
+        "control-03": 9,
+        "control-04": 11,
+        "control-05": 13,
+        "control-06": 15,
+        "control-07": 17,
+        "control-08": 19,
+        "control-09": 21,
+        "control-10": 23,
+        "control-11": 25,
+        "control-12": 27,
+        "control-13": 29,
+        "control-14": 31,
+        "control-15": 33,
+        "control-16": 35,
+        "control-17": 37,
+        "control-18": 39,
+        "control-19": 41
+      },
+      "peak_allocated_gib": [
+        64.79732084274292,
+        64.79732084274292
+      ],
+      "peak_reserved_gib": [
+        67.3984375,
+        67.3984375
+      ],
+      "maximum_decoder_buffer_latents": 19,
+      "maximum_decoder_active_records": 1,
+      "maximum_history_tokens": 15360,
+      "maximum_segments": 21,
+      "all_rank_precodec_outputs_equal": true,
+      "idle_free_blocks": [
+        187,
+        187
+      ]
+    },
+    {
+      "history_budget": 36,
+      "frames": 2881,
+      "media_seconds": 120.04166666666667,
+      "e2e_seconds": 554.4440735392272,
+      "rtf": 4.618763542152535,
+      "first_playable_frame_seconds": 19.042516503483057,
+      "chunk_intervals": [
+        {
+          "region": "early",
+          "samples": 15,
+          "p50_seconds": 11.981817721389234,
+          "p95_seconds": 19.00999874062836
+        },
+        {
+          "region": "middle",
+          "samples": 15,
+          "p50_seconds": 11.745748836547136,
+          "p95_seconds": 13.7452044878155
+        },
+        {
+          "region": "late",
+          "samples": 15,
+          "p50_seconds": 11.533435450866818,
+          "p95_seconds": 20.294965938664973
+        }
+      ],
+      "control_application_chunks": {
+        "control-00": 3,
+        "control-01": 5,
+        "control-02": 7,
+        "control-03": 9,
+        "control-04": 11,
+        "control-05": 13,
+        "control-06": 15,
+        "control-07": 17,
+        "control-08": 19,
+        "control-09": 21,
+        "control-10": 23,
+        "control-11": 25,
+        "control-12": 27,
+        "control-13": 29,
+        "control-14": 31,
+        "control-15": 33,
+        "control-16": 35,
+        "control-17": 37,
+        "control-18": 39,
+        "control-19": 41
+      },
+      "peak_allocated_gib": [
+        72.2955641746521,
+        72.2955641746521
+      ],
+      "peak_reserved_gib": [
+        74.787109375,
+        74.787109375
+      ],
+      "maximum_decoder_buffer_latents": 19,
+      "maximum_decoder_active_records": 1,
+      "maximum_history_tokens": 31680,
+      "maximum_segments": 21,
+      "all_rank_precodec_outputs_equal": true,
+      "idle_free_blocks": [
+        267,
+        267
+      ]
+    }
+  ],
+  "implementation": "2097719014bd540333d661ae3873ac1f6c00ffc4",
+  "protocol": {
+    "height": 704,
+    "width": 1280,
+    "frames": 2881,
+    "fps": 24,
+    "steps": 4,
+    "seed": 42,
+    "sp": 2,
+    "dtype": "bfloat16",
+    "resident": true,
+    "nominal_chunk_latents": 16,
+    "final_chunk_latents": 17,
+    "controls": 20,
+    "sessions_per_budget": 1,
+    "matched_warmup_excluded": false,
+    "e2e_includes": [
+      "control",
+      "encoding",
+      "disk writes",
+      "client decode",
+      "worker observations"
+    ],
+    "e2e_excludes": [
+      "model startup"
+    ]
+  }
+}

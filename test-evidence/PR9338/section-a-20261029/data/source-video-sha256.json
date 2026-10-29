@@ -1,0 +1,12 @@
+{
+  "full-4step/reference.mp4": "1567d7c93d091db671d1ea9ebdae50f3a45b67190ac9ed4e88328924bf4a4224",
+  "full-4step/candidate.mp4": "1567d7c93d091db671d1ea9ebdae50f3a45b67190ac9ed4e88328924bf4a4224",
+  "recent-4step/reference.mp4": "bf40af56a4ff51c2514973ebb469f23597473f153c4bbe0883ce1e6899ac4d62",
+  "recent-4step/candidate.mp4": "bf40af56a4ff51c2514973ebb469f23597473f153c4bbe0883ce1e6899ac4d62",
+  "long-recent-18-matched/reference.mp4": "f824ae13163e784a1207028cca55ebd2a00e801d9460b2a5738005977211ed81",
+  "long-recent-18-matched/candidate.mp4": "f824ae13163e784a1207028cca55ebd2a00e801d9460b2a5738005977211ed81",
+  "long-recent-36-matched/reference.mp4": "190a5faae1fa7748b2a613db840cb6ca72f6f13e6e9e80ec8d8ba783d782251f",
+  "long-recent-36-matched/candidate.mp4": "190a5faae1fa7748b2a613db840cb6ca72f6f13e6e9e80ec8d8ba783d782251f",
+  "long-recent-18-native-noise/reference.mp4": "2e998adfb8cbf38c1a0ddbfbe4d93e2bddda5cd60c756bfb974823bc65cbbe3f",
+  "long-recent-36-native-noise/reference.mp4": "4cd41ca54323673e7596806fd6ab43f622ae52ddf5b5de912be9fb49715d1114"
+}

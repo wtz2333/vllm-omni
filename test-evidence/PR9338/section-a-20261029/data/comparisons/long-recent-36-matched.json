@@ -1,0 +1,678 @@
+{
+  "history": "recent",
+  "noise": "incremental_v1",
+  "records": [
+    {
+      "turn": 0,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 1,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 2,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 3,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 4,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 5,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 6,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 7,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 8,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 9,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 10,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 11,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 12,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 13,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 14,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 15,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 16,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 17,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 18,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 19,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 20,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 21,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 22,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 23,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 24,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 25,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 26,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 27,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 28,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 29,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 30,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 31,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 32,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 33,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 34,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 35,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 36,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 37,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 38,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 39,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 40,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 41,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 42,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 43,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 44,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 45,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 46,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    },
+    {
+      "turn": 47,
+      "latents": {
+        "max_abs": 0.0,
+        "mae": 0.0,
+        "different_elements": 0,
+        "exact": true
+      },
+      "video": {
+        "exact": true,
+        "max_abs": 0,
+        "mae": 0
+      }
+    }
+  ]
+}

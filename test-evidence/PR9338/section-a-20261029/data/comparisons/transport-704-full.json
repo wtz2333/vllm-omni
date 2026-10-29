@@ -1,0 +1,18 @@
+{
+  "history": "full",
+  "demo": "plain",
+  "frames": 129,
+  "records": [
+    {
+      "chunk": 0,
+      "latents_max_abs": 0,
+      "video_max_abs": 0
+    },
+    {
+      "chunk": 1,
+      "latents_max_abs": 0,
+      "video_max_abs": 0
+    }
+  ],
+  "scope": "exact pre-codec video and latents; encoded media frame count and PTS"
+}
