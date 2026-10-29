@@ -1,0 +1,93 @@
+{
+  "implementation": "2097719014bd540333d661ae3873ac1f6c00ffc4",
+  "rows": [
+    {
+      "history_budget": 18,
+      "chunks": 45,
+      "metadata_interval_ms": {
+        "n": 45,
+        "median": 11340.11248126626,
+        "mean": 11951.664943475691,
+        "std": 1680.5190219924084,
+        "p95_nearest_rank": 13943.690441548824
+      },
+      "regions": [
+        {
+          "name": "early",
+          "metadata_interval_ms": {
+            "n": 15,
+            "median": 12179.18100580573,
+            "mean": 12422.109158585468,
+            "std": 1615.412860661469,
+            "p95_nearest_rank": 17138.719284906983
+          }
+        },
+        {
+          "name": "middle",
+          "metadata_interval_ms": {
+            "n": 15,
+            "median": 11417.093995027244,
+            "mean": 11765.491124490896,
+            "std": 882.7757497416248,
+            "p95_nearest_rank": 13943.690441548824
+          }
+        },
+        {
+          "name": "late",
+          "metadata_interval_ms": {
+            "n": 15,
+            "median": 10802.550255320966,
+            "mean": 11667.394547350705,
+            "std": 2264.1081206885965,
+            "p95_nearest_rank": 19439.69482090324
+          }
+        }
+      ]
+    },
+    {
+      "history_budget": 36,
+      "chunks": 45,
+      "metadata_interval_ms": {
+        "n": 45,
+        "median": 11735.06580479443,
+        "mean": 12314.909932700297,
+        "std": 1775.5859747616503,
+        "p95_nearest_rank": 13745.2044878155
+      },
+      "regions": [
+        {
+          "name": "early",
+          "metadata_interval_ms": {
+            "n": 15,
+            "median": 11981.817721389234,
+            "mean": 12590.427009140452,
+            "std": 1938.9197545587672,
+            "p95_nearest_rank": 19016.7372263968
+          }
+        },
+        {
+          "name": "middle",
+          "metadata_interval_ms": {
+            "n": 15,
+            "median": 11745.748836547136,
+            "mean": 12010.939960802594,
+            "std": 797.6921696464345,
+            "p95_nearest_rank": 13745.2044878155
+          }
+        },
+        {
+          "name": "late",
+          "metadata_interval_ms": {
+            "n": 15,
+            "median": 11533.435450866818,
+            "mean": 12343.362828157842,
+            "std": 2309.022261210834,
+            "p95_nearest_rank": 20294.965938664973
+          }
+        }
+      ]
+    }
+  ],
+  "request_start_reconstruction": "first decoded timestamp minus recorded first-playable latency",
+  "note": "One SP2 diagnostic session per budget; client intervals include encoding/transport. No per-stage CUDA events were collected for these recent rollouts. Historical 253-frame stage times must not be substituted."
+}

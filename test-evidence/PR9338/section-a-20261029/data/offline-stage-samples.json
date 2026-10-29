@@ -1,0 +1,478 @@
+[
+  {
+    "steps": 4,
+    "phase": "s4_stages",
+    "sample": 0,
+    "e2e_ms": 19242.574953474104,
+    "stages": [
+      {
+        "stage": "prepare_encode",
+        "cpu_wall_ms": 6.128961220383644,
+        "cuda_stream_elapsed_ms": 6.110112190246582
+      },
+      {
+        "stage": "_encode_prompt",
+        "cpu_wall_ms": 25.674195028841496,
+        "cuda_stream_elapsed_ms": 41.80748748779297
+      },
+      {
+        "stage": "prepare_next_chunk",
+        "cpu_wall_ms": 42.03264508396387,
+        "cuda_stream_elapsed_ms": 42.03081512451172
+      },
+      {
+        "stage": "dit_step_0",
+        "cpu_wall_ms": 1571.0864048451185,
+        "cuda_stream_elapsed_ms": 1593.1348876953125
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 22.276367992162704,
+        "cuda_stream_elapsed_ms": 0.23945599794387817
+      },
+      {
+        "stage": "dit_step_1",
+        "cpu_wall_ms": 1562.1469281613827,
+        "cuda_stream_elapsed_ms": 1584.2437744140625
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.18755625933408737,
+        "cuda_stream_elapsed_ms": 0.029920000582933426
+      },
+      {
+        "stage": "dit_step_2",
+        "cpu_wall_ms": 1584.609504789114,
+        "cuda_stream_elapsed_ms": 1584.90283203125
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.1745251938700676,
+        "cuda_stream_elapsed_ms": 0.027775999158620834
+      },
+      {
+        "stage": "dit_step_3",
+        "cpu_wall_ms": 1581.4750222489238,
+        "cuda_stream_elapsed_ms": 1581.6544189453125
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.17234496772289276,
+        "cuda_stream_elapsed_ms": 0.030208000913262367
+      },
+      {
+        "stage": "dit_cache_commit",
+        "cpu_wall_ms": 1560.660356655717,
+        "cuda_stream_elapsed_ms": 1582.682373046875
+      },
+      {
+        "stage": "_prepare_vae_decode_latents",
+        "cpu_wall_ms": 0.14412403106689453,
+        "cuda_stream_elapsed_ms": 0.005632000043988228
+      },
+      {
+        "stage": "pixelumm_window",
+        "cpu_wall_ms": 8738.177523948252,
+        "cuda_stream_elapsed_ms": 8754.6240234375
+      },
+      {
+        "stage": "pixelumm_decode",
+        "cpu_wall_ms": 8738.317814655602,
+        "cuda_stream_elapsed_ms": 8754.630859375
+      },
+      {
+        "stage": "forward",
+        "cpu_wall_ms": 16692.852496169508,
+        "cuda_stream_elapsed_ms": 16731.529296875
+      }
+    ],
+    "derived": {
+      "text_encoding_ms": 41.80748748779297,
+      "dit_denoise_ms": 6343.9359130859375,
+      "kv_commit_ms": 1582.682373046875,
+      "pixelumm_decode_ms": 8754.630859375,
+      "pipeline_scope_ms": 16731.529296875,
+      "diagnostic_e2e_ms": 19242.574953474104,
+      "other_pipeline_residual_ms": 8.472663879394531,
+      "post_pipeline_return_residual_ms": 2511.0456565991044,
+      "average_dit_step_ms": 1585.9839782714844
+    }
+  },
+  {
+    "steps": 4,
+    "phase": "s4_stages",
+    "sample": 1,
+    "e2e_ms": 19161.727636121213,
+    "stages": [
+      {
+        "stage": "prepare_encode",
+        "cpu_wall_ms": 6.316631101071835,
+        "cuda_stream_elapsed_ms": 6.3085761070251465
+      },
+      {
+        "stage": "_encode_prompt",
+        "cpu_wall_ms": 23.85030034929514,
+        "cuda_stream_elapsed_ms": 40.851966857910156
+      },
+      {
+        "stage": "prepare_next_chunk",
+        "cpu_wall_ms": 41.03909060359001,
+        "cuda_stream_elapsed_ms": 41.03721618652344
+      },
+      {
+        "stage": "dit_step_0",
+        "cpu_wall_ms": 1595.1378773897886,
+        "cuda_stream_elapsed_ms": 1617.2252197265625
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 22.32670597732067,
+        "cuda_stream_elapsed_ms": 0.2513920068740845
+      },
+      {
+        "stage": "dit_step_1",
+        "cpu_wall_ms": 1562.8023631870747,
+        "cuda_stream_elapsed_ms": 1584.890625
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.20280573517084122,
+        "cuda_stream_elapsed_ms": 0.029440000653266907
+      },
+      {
+        "stage": "dit_step_2",
+        "cpu_wall_ms": 1582.678684964776,
+        "cuda_stream_elapsed_ms": 1583.0057373046875
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.18262304365634918,
+        "cuda_stream_elapsed_ms": 0.030079999938607216
+      },
+      {
+        "stage": "dit_step_3",
+        "cpu_wall_ms": 1583.7133321911097,
+        "cuda_stream_elapsed_ms": 1583.934326171875
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.18014945089817047,
+        "cuda_stream_elapsed_ms": 0.030368000268936157
+      },
+      {
+        "stage": "dit_cache_commit",
+        "cpu_wall_ms": 1562.9768902435899,
+        "cuda_stream_elapsed_ms": 1584.8944091796875
+      },
+      {
+        "stage": "_prepare_vae_decode_latents",
+        "cpu_wall_ms": 0.19542314112186432,
+        "cuda_stream_elapsed_ms": 0.005824000108987093
+      },
+      {
+        "stage": "pixelumm_window",
+        "cpu_wall_ms": 8728.81187312305,
+        "cuda_stream_elapsed_ms": 8745.85546875
+      },
+      {
+        "stage": "pixelumm_decode",
+        "cpu_wall_ms": 8728.96683588624,
+        "cuda_stream_elapsed_ms": 8745.861328125
+      },
+      {
+        "stage": "forward",
+        "cpu_wall_ms": 16710.215216502547,
+        "cuda_stream_elapsed_ms": 16749.3046875
+      }
+    ],
+    "derived": {
+      "text_encoding_ms": 40.851966857910156,
+      "dit_denoise_ms": 6369.055908203125,
+      "kv_commit_ms": 1584.8944091796875,
+      "pixelumm_decode_ms": 8745.861328125,
+      "pipeline_scope_ms": 16749.3046875,
+      "diagnostic_e2e_ms": 19161.727636121213,
+      "other_pipeline_residual_ms": 8.641075134277344,
+      "post_pipeline_return_residual_ms": 2412.4229486212134,
+      "average_dit_step_ms": 1592.2639770507812
+    }
+  },
+  {
+    "steps": 8,
+    "phase": "s8_stages",
+    "sample": 0,
+    "e2e_ms": 25458.148901350796,
+    "stages": [
+      {
+        "stage": "prepare_encode",
+        "cpu_wall_ms": 6.000978872179985,
+        "cuda_stream_elapsed_ms": 5.998112201690674
+      },
+      {
+        "stage": "_encode_prompt",
+        "cpu_wall_ms": 25.55468212813139,
+        "cuda_stream_elapsed_ms": 41.46636962890625
+      },
+      {
+        "stage": "prepare_next_chunk",
+        "cpu_wall_ms": 41.65672231465578,
+        "cuda_stream_elapsed_ms": 41.65411376953125
+      },
+      {
+        "stage": "dit_step_0",
+        "cpu_wall_ms": 1570.1525351032615,
+        "cuda_stream_elapsed_ms": 1592.233642578125
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 22.292793728411198,
+        "cuda_stream_elapsed_ms": 0.22633600234985352
+      },
+      {
+        "stage": "dit_step_1",
+        "cpu_wall_ms": 1561.3028593361378,
+        "cuda_stream_elapsed_ms": 1583.38720703125
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.19223522394895554,
+        "cuda_stream_elapsed_ms": 0.029311999678611755
+      },
+      {
+        "stage": "dit_step_2",
+        "cpu_wall_ms": 1583.1802431493998,
+        "cuda_stream_elapsed_ms": 1583.45556640625
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.1810779795050621,
+        "cuda_stream_elapsed_ms": 0.030239999294281006
+      },
+      {
+        "stage": "dit_step_3",
+        "cpu_wall_ms": 1583.289991132915,
+        "cuda_stream_elapsed_ms": 1583.3905029296875
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.17622672021389008,
+        "cuda_stream_elapsed_ms": 0.03014400042593479
+      },
+      {
+        "stage": "dit_step_4",
+        "cpu_wall_ms": 1583.9998181909323,
+        "cuda_stream_elapsed_ms": 1584.1318359375
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.2134973183274269,
+        "cuda_stream_elapsed_ms": 0.03046399913728237
+      },
+      {
+        "stage": "dit_step_5",
+        "cpu_wall_ms": 1584.0261559933424,
+        "cuda_stream_elapsed_ms": 1584.4595947265625
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.18584448844194412,
+        "cuda_stream_elapsed_ms": 0.029632000252604485
+      },
+      {
+        "stage": "dit_step_6",
+        "cpu_wall_ms": 1588.6320052668452,
+        "cuda_stream_elapsed_ms": 1588.8660888671875
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.2031717449426651,
+        "cuda_stream_elapsed_ms": 0.029983999207615852
+      },
+      {
+        "stage": "dit_step_7",
+        "cpu_wall_ms": 1586.3335505127907,
+        "cuda_stream_elapsed_ms": 1586.399169921875
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.22623687982559204,
+        "cuda_stream_elapsed_ms": 0.030208000913262367
+      },
+      {
+        "stage": "dit_cache_commit",
+        "cpu_wall_ms": 1563.3461270481348,
+        "cuda_stream_elapsed_ms": 1585.2635498046875
+      },
+      {
+        "stage": "_prepare_vae_decode_latents",
+        "cpu_wall_ms": 0.1926124095916748,
+        "cuda_stream_elapsed_ms": 0.005696000065654516
+      },
+      {
+        "stage": "pixelumm_window",
+        "cpu_wall_ms": 8740.269576199353,
+        "cuda_stream_elapsed_ms": 8757.01171875
+      },
+      {
+        "stage": "pixelumm_decode",
+        "cpu_wall_ms": 8740.428734570742,
+        "cuda_stream_elapsed_ms": 8757.017578125
+      },
+      {
+        "stage": "forward",
+        "cpu_wall_ms": 23039.915987290442,
+        "cuda_stream_elapsed_ms": 23078.583984375
+      }
+    ],
+    "derived": {
+      "text_encoding_ms": 41.46636962890625,
+      "dit_denoise_ms": 12686.323608398438,
+      "kv_commit_ms": 1585.2635498046875,
+      "pixelumm_decode_ms": 8757.017578125,
+      "pipeline_scope_ms": 23078.583984375,
+      "diagnostic_e2e_ms": 25458.148901350796,
+      "other_pipeline_residual_ms": 8.51287841796875,
+      "post_pipeline_return_residual_ms": 2379.564916975796,
+      "average_dit_step_ms": 1585.7904510498047
+    }
+  },
+  {
+    "steps": 8,
+    "phase": "s8_stages",
+    "sample": 1,
+    "e2e_ms": 25456.611675210297,
+    "stages": [
+      {
+        "stage": "prepare_encode",
+        "cpu_wall_ms": 6.103755906224251,
+        "cuda_stream_elapsed_ms": 6.101471900939941
+      },
+      {
+        "stage": "_encode_prompt",
+        "cpu_wall_ms": 24.578656069934368,
+        "cuda_stream_elapsed_ms": 41.38275146484375
+      },
+      {
+        "stage": "prepare_next_chunk",
+        "cpu_wall_ms": 41.57030116766691,
+        "cuda_stream_elapsed_ms": 41.568382263183594
+      },
+      {
+        "stage": "dit_step_0",
+        "cpu_wall_ms": 1568.5374271124601,
+        "cuda_stream_elapsed_ms": 1590.5733642578125
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 22.267145104706287,
+        "cuda_stream_elapsed_ms": 0.24499200284481049
+      },
+      {
+        "stage": "dit_step_1",
+        "cpu_wall_ms": 1561.7402894422412,
+        "cuda_stream_elapsed_ms": 1583.8875732421875
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.17246976494789124,
+        "cuda_stream_elapsed_ms": 0.030112000182271004
+      },
+      {
+        "stage": "dit_step_2",
+        "cpu_wall_ms": 1585.576026700437,
+        "cuda_stream_elapsed_ms": 1585.75927734375
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.19843503832817078,
+        "cuda_stream_elapsed_ms": 0.027712000533938408
+      },
+      {
+        "stage": "dit_step_3",
+        "cpu_wall_ms": 1583.6811382323503,
+        "cuda_stream_elapsed_ms": 1583.8834228515625
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.17953850328922272,
+        "cuda_stream_elapsed_ms": 0.03033600002527237
+      },
+      {
+        "stage": "dit_step_4",
+        "cpu_wall_ms": 1582.0459108799696,
+        "cuda_stream_elapsed_ms": 1582.24365234375
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.18004514276981354,
+        "cuda_stream_elapsed_ms": 0.028224000707268715
+      },
+      {
+        "stage": "dit_step_5",
+        "cpu_wall_ms": 1584.4547459855676,
+        "cuda_stream_elapsed_ms": 1584.63037109375
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.17515942454338074,
+        "cuda_stream_elapsed_ms": 0.03033600002527237
+      },
+      {
+        "stage": "dit_step_6",
+        "cpu_wall_ms": 1584.2361375689507,
+        "cuda_stream_elapsed_ms": 1584.503662109375
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.17683859914541245,
+        "cuda_stream_elapsed_ms": 0.027615999802947044
+      },
+      {
+        "stage": "dit_step_7",
+        "cpu_wall_ms": 1582.0258101448417,
+        "cuda_stream_elapsed_ms": 1582.3011474609375
+      },
+      {
+        "stage": "step_scheduler",
+        "cpu_wall_ms": 0.18075387924909592,
+        "cuda_stream_elapsed_ms": 0.029664000496268272
+      },
+      {
+        "stage": "dit_cache_commit",
+        "cpu_wall_ms": 1559.6309900283813,
+        "cuda_stream_elapsed_ms": 1581.7479248046875
+      },
+      {
+        "stage": "_prepare_vae_decode_latents",
+        "cpu_wall_ms": 0.13859756290912628,
+        "cuda_stream_elapsed_ms": 0.005663999821990728
+      },
+      {
+        "stage": "pixelumm_window",
+        "cpu_wall_ms": 8744.135719724,
+        "cuda_stream_elapsed_ms": 8760.5048828125
+      },
+      {
+        "stage": "pixelumm_decode",
+        "cpu_wall_ms": 8744.300111196935,
+        "cuda_stream_elapsed_ms": 8760.51171875
+      },
+      {
+        "stage": "forward",
+        "cpu_wall_ms": 23031.49013314396,
+        "cuda_stream_elapsed_ms": 23070.044921875
+      }
+    ],
+    "derived": {
+      "text_encoding_ms": 41.38275146484375,
+      "dit_denoise_ms": 12677.782470703125,
+      "kv_commit_ms": 1581.7479248046875,
+      "pixelumm_decode_ms": 8760.51171875,
+      "pipeline_scope_ms": 23070.044921875,
+      "diagnostic_e2e_ms": 25456.611675210297,
+      "other_pipeline_residual_ms": 8.62005615234375,
+      "post_pipeline_return_residual_ms": 2386.566753335297,
+      "average_dit_step_ms": 1584.7228088378906
+    }
+  }
+]

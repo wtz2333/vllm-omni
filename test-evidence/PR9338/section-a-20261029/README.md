@@ -2,6 +2,8 @@
 
 Evidence for PR #9338. Model implementation: `2097719014bd540333d661ae3873ac1f6c00ffc4`; the precision campaign used `72ff85c6365f22599ad7958743d7dd71212cd2e3`, with only documentation uncommitted. All model weights and computations were real. The reported recent-history budgets are **18 and 36**; the interrupted 72-budget campaign is excluded and was not retried.
 
+The [model architecture, earlier offline 4/8-step results, DiT/KV/PixelUMM stage tables, per-chunk records and RFC scope map](architecture-stages-scope.md) are retained alongside the long-stream data. They explicitly identify their earlier revisions and timing methods.
+
 ## Accuracy and entrypoint consistency
 
 One H200, BF16, resident weights, FlexAttention, SP1, 704×1280, 24 fps, seed 42, CFG=1, flow shift=5. Each accuracy case ran once. Models were loaded in separate processes.

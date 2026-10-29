@@ -1,0 +1,145 @@
+{
+  "model": "tencent/Hy-Nomas-Diffusers",
+  "revision": "a1ae04d11ae4ea176d1f76de634c115944f9882d",
+  "components": [
+    {
+      "component": "transformer",
+      "bf16_parameter_bytes": 17106869184,
+      "parameter_count": 8553434592,
+      "weight_gib": 15.93201345205307,
+      "config": {
+        "_class_name": "HyNomasTransformer3DModel",
+        "_diffusers_version": "0.42.0.dev0",
+        "attention_head_dim": 128,
+        "camera_attention_dim": 1024,
+        "camera_embed_dim": 128,
+        "camera_num_attention_heads": 16,
+        "camera_rope_axes_dim": [
+          8,
+          28,
+          28
+        ],
+        "in_channels": 32,
+        "mlp_ratio": 4.0,
+        "num_attention_heads": 16,
+        "num_layers": 54,
+        "out_channels": 32,
+        "rope_axes_dim": [
+          16,
+          56,
+          56
+        ],
+        "rope_theta": 256.0,
+        "text_embed_dim": 3584
+      }
+    },
+    {
+      "component": "text_encoder",
+      "bf16_parameter_bytes": 14141238272,
+      "parameter_count": 7070619136,
+      "weight_gib": 13.17005443572998,
+      "config": {
+        "architectures": [
+          "Qwen2_5_VLTextModel"
+        ],
+        "attention_dropout": 0.0,
+        "bos_token_id": 151643,
+        "dtype": "bfloat16",
+        "eos_token_id": 151645,
+        "hidden_act": "silu",
+        "hidden_size": 3584,
+        "initializer_range": 0.02,
+        "intermediate_size": 18944,
+        "layer_types": [
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention",
+          "full_attention"
+        ],
+        "max_position_embeddings": 128000,
+        "max_window_layers": 28,
+        "model_type": "qwen2_5_vl_text",
+        "num_attention_heads": 28,
+        "num_hidden_layers": 28,
+        "num_key_value_heads": 4,
+        "pad_token_id": null,
+        "rms_norm_eps": 1e-06,
+        "rope_parameters": {
+          "mrope_section": [
+            16,
+            24,
+            24
+          ],
+          "rope_theta": 1000000.0,
+          "rope_type": "default",
+          "type": "mrope"
+        },
+        "sliding_window": null,
+        "transformers_version": "5.20.2",
+        "use_cache": true,
+        "use_sliding_window": false,
+        "vocab_size": 152064
+      }
+    },
+    {
+      "component": "decoder",
+      "bf16_parameter_bytes": 13943586816,
+      "parameter_count": 6971793408,
+      "weight_gib": 12.985977172851562,
+      "config": {
+        "_class_name": "PixelUMMDecoder",
+        "_diffusers_version": "0.42.0.dev0",
+        "decoder_tile_overlap_pixels": 64,
+        "decoder_tile_pixels": 0,
+        "denoising_step_list": [
+          0.999,
+          0.866,
+          0.634,
+          0.342
+        ],
+        "head_dim": 128,
+        "hidden_size": 4096,
+        "intermediate_size": 12288,
+        "local_attention_tile_pixels": 128,
+        "num_heads": 32,
+        "num_kv_heads": 8,
+        "num_layers": 36,
+        "num_steps": 1,
+        "rms_norm_eps": 1e-06,
+        "rope_theta_hw": 10000.0,
+        "rope_theta_t": 1000000.0,
+        "seed": 42,
+        "tail_hold_latents": 1,
+        "temporal_overlap_latents": 5,
+        "temporal_window_latents": 10
+      }
+    }
+  ],
+  "total_parameters": 22595847136,
+  "total_bf16_weight_gib": 42.08804506063461,
+  "calculation": "Parameter count = BF16 shard-index total_size / 2; GiB = bytes / 2**30; excludes runtime state"
+}

@@ -1,0 +1,297 @@
+{
+  "implementation": "257856d3afce694803f83fd60674f292b7a34583",
+  "protocol": {
+    "hardware": "H200",
+    "sp": 1,
+    "resident": true,
+    "dtype": "bfloat16",
+    "height": 704,
+    "width": 1280,
+    "frames": 121,
+    "fps": 24,
+    "seed": 42,
+    "cfg": 1,
+    "flow_shift": 5,
+    "measured_samples_per_step_count": 10,
+    "baseline_before_after": [
+      5,
+      5
+    ],
+    "initial_warmups_per_step_count": 2,
+    "recovery_warmups_per_step_count": 1,
+    "stage_diagnostic_samples_per_step_count": 2,
+    "profiler_in_measured_samples": false
+  },
+  "summary": {
+    "s8_pre": {
+      "n": 5,
+      "median_ms": 25644.222177565098,
+      "mean_ms": 25937.135416269302,
+      "std_ms": 792.8491015354657,
+      "min_ms": 25481.476498767734,
+      "max_ms": 27347.132869064808,
+      "cv_percent": 3.056810587641625,
+      "peak_allocated_bytes": 63451774976,
+      "peak_reserved_bytes": 68039999488
+    },
+    "s8_post": {
+      "n": 5,
+      "median_ms": 25658.34948979318,
+      "mean_ms": 25637.692437134683,
+      "std_ms": 100.32194517221852,
+      "min_ms": 25465.333527885377,
+      "max_ms": 25716.73613321036,
+      "cv_percent": 0.391306454035263,
+      "peak_allocated_bytes": 62667647488,
+      "peak_reserved_bytes": 68039999488
+    },
+    "s8_stages": {
+      "n": 2,
+      "median_ms": 25457.380288280547,
+      "mean_ms": 25457.380288280547,
+      "std_ms": 1.0869830281641486,
+      "min_ms": 25456.611675210297,
+      "max_ms": 25458.148901350796,
+      "cv_percent": 0.004269814945037953,
+      "peak_allocated_bytes": 63451774976,
+      "peak_reserved_bytes": 68039999488
+    },
+    "s4_pre": {
+      "n": 5,
+      "median_ms": 19223.186424933374,
+      "mean_ms": 19230.44417016208,
+      "std_ms": 35.28080161598994,
+      "min_ms": 19195.02955209464,
+      "max_ms": 19281.02746140212,
+      "cv_percent": 0.18346326951060007,
+      "peak_allocated_bytes": 63451774976,
+      "peak_reserved_bytes": 68039999488
+    },
+    "s4_post": {
+      "n": 5,
+      "median_ms": 19146.974614821374,
+      "mean_ms": 19173.741653747857,
+      "std_ms": 77.40295598272006,
+      "min_ms": 19095.44230531901,
+      "max_ms": 19296.124516054988,
+      "cv_percent": 0.4036924945611241,
+      "peak_allocated_bytes": 62667647488,
+      "peak_reserved_bytes": 68039999488
+    },
+    "s4_stages": {
+      "n": 2,
+      "median_ms": 19202.15129479766,
+      "mean_ms": 19202.15129479766,
+      "std_ms": 57.16768634097004,
+      "min_ms": 19161.727636121213,
+      "max_ms": 19242.574953474104,
+      "cv_percent": 0.2977150084035542,
+      "peak_allocated_bytes": 63451774976,
+      "peak_reserved_bytes": 68039999488
+    },
+    "s8_pooled": {
+      "n": 10,
+      "median_ms": 25653.754930011928,
+      "mean_ms": 25787.413926701993,
+      "std_ms": 555.6639678336251,
+      "min_ms": 25465.333527885377,
+      "max_ms": 27347.132869064808,
+      "cv_percent": 2.1547874843636565,
+      "peak_allocated_bytes": 63451774976,
+      "peak_reserved_bytes": 68039999488
+    },
+    "s8_drift_percent": 0.05508964994245247,
+    "s4_pooled": {
+      "n": 10,
+      "median_ms": 19199.928029440343,
+      "mean_ms": 19202.09291195497,
+      "std_ms": 64.10213087928307,
+      "min_ms": 19095.44230531901,
+      "max_ms": 19296.124516054988,
+      "cv_percent": 0.3338288757022623,
+      "peak_allocated_bytes": 63451774976,
+      "peak_reserved_bytes": 68039999488
+    },
+    "s4_drift_percent": -0.39645773820904395,
+    "speedup_four_vs_eight": 1.3361380777404772,
+    "hashes": {
+      "8": "1a8c750f9616478b70672c4e3ad787e726e29d295e5b9542038c5b09d071170a",
+      "4": "ebb48913e72025df7df487f95b38479e9ff452e30921603c3f608b843972b821"
+    }
+  },
+  "stages": [
+    {
+      "steps": 4,
+      "diagnostic_samples": 2,
+      "mean_ms": {
+        "text_encoding_ms": 41.32972717285156,
+        "dit_denoise_ms": 6356.495910644531,
+        "kv_commit_ms": 1583.7883911132812,
+        "pixelumm_decode_ms": 8750.24609375,
+        "pipeline_scope_ms": 16740.4169921875,
+        "diagnostic_e2e_ms": 19202.15129479766,
+        "other_pipeline_residual_ms": 8.556869506835938,
+        "post_pipeline_return_residual_ms": 2461.734302610159,
+        "average_dit_step_ms": 1589.1239776611328
+      }
+    },
+    {
+      "steps": 8,
+      "diagnostic_samples": 2,
+      "mean_ms": {
+        "text_encoding_ms": 41.424560546875,
+        "dit_denoise_ms": 12682.053039550781,
+        "kv_commit_ms": 1583.5057373046875,
+        "pixelumm_decode_ms": 8758.7646484375,
+        "pipeline_scope_ms": 23074.314453125,
+        "diagnostic_e2e_ms": 25457.380288280547,
+        "other_pipeline_residual_ms": 8.56646728515625,
+        "post_pipeline_return_residual_ms": 2383.0658351555467,
+        "average_dit_step_ms": 1585.2566299438477
+      }
+    }
+  ],
+  "unprofiled_samples": [
+    {
+      "phase": "s8_pre",
+      "steps": 8,
+      "index": 0,
+      "e2e_ms": 25644.222177565098,
+      "sha256": "1a8c750f9616478b70672c4e3ad787e726e29d295e5b9542038c5b09d071170a"
+    },
+    {
+      "phase": "s8_pre",
+      "steps": 8,
+      "index": 1,
+      "e2e_ms": 27347.132869064808,
+      "sha256": "1a8c750f9616478b70672c4e3ad787e726e29d295e5b9542038c5b09d071170a"
+    },
+    {
+      "phase": "s8_pre",
+      "steps": 8,
+      "index": 2,
+      "e2e_ms": 25481.476498767734,
+      "sha256": "1a8c750f9616478b70672c4e3ad787e726e29d295e5b9542038c5b09d071170a"
+    },
+    {
+      "phase": "s8_pre",
+      "steps": 8,
+      "index": 3,
+      "e2e_ms": 25690.6280182302,
+      "sha256": "1a8c750f9616478b70672c4e3ad787e726e29d295e5b9542038c5b09d071170a"
+    },
+    {
+      "phase": "s8_pre",
+      "steps": 8,
+      "index": 4,
+      "e2e_ms": 25522.217517718673,
+      "sha256": "1a8c750f9616478b70672c4e3ad787e726e29d295e5b9542038c5b09d071170a"
+    },
+    {
+      "phase": "s4_pre",
+      "steps": 4,
+      "index": 0,
+      "e2e_ms": 19195.02955209464,
+      "sha256": "ebb48913e72025df7df487f95b38479e9ff452e30921603c3f608b843972b821"
+    },
+    {
+      "phase": "s4_pre",
+      "steps": 4,
+      "index": 1,
+      "e2e_ms": 19203.228127211332,
+      "sha256": "ebb48913e72025df7df487f95b38479e9ff452e30921603c3f608b843972b821"
+    },
+    {
+      "phase": "s4_pre",
+      "steps": 4,
+      "index": 2,
+      "e2e_ms": 19281.02746140212,
+      "sha256": "ebb48913e72025df7df487f95b38479e9ff452e30921603c3f608b843972b821"
+    },
+    {
+      "phase": "s4_pre",
+      "steps": 4,
+      "index": 3,
+      "e2e_ms": 19223.186424933374,
+      "sha256": "ebb48913e72025df7df487f95b38479e9ff452e30921603c3f608b843972b821"
+    },
+    {
+      "phase": "s4_pre",
+      "steps": 4,
+      "index": 4,
+      "e2e_ms": 19249.749285168946,
+      "sha256": "ebb48913e72025df7df487f95b38479e9ff452e30921603c3f608b843972b821"
+    },
+    {
+      "phase": "s4_post",
+      "steps": 4,
+      "index": 0,
+      "e2e_ms": 19296.124516054988,
+      "sha256": "ebb48913e72025df7df487f95b38479e9ff452e30921603c3f608b843972b821"
+    },
+    {
+      "phase": "s4_post",
+      "steps": 4,
+      "index": 1,
+      "e2e_ms": 19146.974614821374,
+      "sha256": "ebb48913e72025df7df487f95b38479e9ff452e30921603c3f608b843972b821"
+    },
+    {
+      "phase": "s4_post",
+      "steps": 4,
+      "index": 2,
+      "e2e_ms": 19095.44230531901,
+      "sha256": "ebb48913e72025df7df487f95b38479e9ff452e30921603c3f608b843972b821"
+    },
+    {
+      "phase": "s4_post",
+      "steps": 4,
+      "index": 3,
+      "e2e_ms": 19133.538900874555,
+      "sha256": "ebb48913e72025df7df487f95b38479e9ff452e30921603c3f608b843972b821"
+    },
+    {
+      "phase": "s4_post",
+      "steps": 4,
+      "index": 4,
+      "e2e_ms": 19196.627931669354,
+      "sha256": "ebb48913e72025df7df487f95b38479e9ff452e30921603c3f608b843972b821"
+    },
+    {
+      "phase": "s8_post",
+      "steps": 8,
+      "index": 0,
+      "e2e_ms": 25465.333527885377,
+      "sha256": "1a8c750f9616478b70672c4e3ad787e726e29d295e5b9542038c5b09d071170a"
+    },
+    {
+      "phase": "s8_post",
+      "steps": 8,
+      "index": 1,
+      "e2e_ms": 25716.73613321036,
+      "sha256": "1a8c750f9616478b70672c4e3ad787e726e29d295e5b9542038c5b09d071170a"
+    },
+    {
+      "phase": "s8_post",
+      "steps": 8,
+      "index": 2,
+      "e2e_ms": 25698.88266455382,
+      "sha256": "1a8c750f9616478b70672c4e3ad787e726e29d295e5b9542038c5b09d071170a"
+    },
+    {
+      "phase": "s8_post",
+      "steps": 8,
+      "index": 3,
+      "e2e_ms": 25649.160370230675,
+      "sha256": "1a8c750f9616478b70672c4e3ad787e726e29d295e5b9542038c5b09d071170a"
+    },
+    {
+      "phase": "s8_post",
+      "steps": 8,
+      "index": 4,
+      "e2e_ms": 25658.34948979318,
+      "sha256": "1a8c750f9616478b70672c4e3ad787e726e29d295e5b9542038c5b09d071170a"
+    }
+  ],
+  "timing_note": "Stage rows are separate CUDA-event stream-elapsed diagnostics, including possible host gaps. Residuals are not separately timed CPU/IPC work. PixelUMM prediction covers six logical windows."
+}
