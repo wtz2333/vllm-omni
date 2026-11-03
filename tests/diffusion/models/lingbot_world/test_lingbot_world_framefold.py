@@ -14,9 +14,27 @@ from vllm_omni.diffusion.models.lingbot_world.dmd_block import ARBlockContext, L
 from vllm_omni.diffusion.models.lingbot_world.pipeline import LingBotWorldCausalDMDPipeline
 from vllm_omni.experimental.ar_diffusion.capability import ARDiffusionKVBranchSpec
 from vllm_omni.experimental.ar_diffusion.kv_cache import ARDiffusionKVCache, ARDiffusionKVConfig
+from vllm_omni.experimental.ar_diffusion.kv_cache.paged_attention import ar_diffusion_paged_attention
 from vllm_omni.experimental.ar_diffusion.kv_cache.state import ARDiffusionKVState
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion, pytest.mark.cpu]
+
+
+def test_packed_window_attention_masks_partial_page(monkeypatch):
+    module = attention_tests._load_module()
+    monkeypatch.setattr(module, "ar_diffusion_paged_attention", ar_diffusion_paged_attention)
+    generator = torch.Generator().manual_seed(7)
+    query = torch.randn(1, 5, 2, 4, generator=generator)
+    key = torch.randn(1, 9, 2, 4, generator=generator)
+    value = torch.randn(1, 9, 2, 4, generator=generator)
+    actual = module._paged_window_attention(query, key, value, block_size=16, softmax_scale=0.5)
+    expected = torch.nn.functional.scaled_dot_product_attention(
+        query.transpose(1, 2),
+        key.transpose(1, 2),
+        value.transpose(1, 2),
+        scale=0.5,
+    ).transpose(1, 2)
+    torch.testing.assert_close(actual, expected, atol=1e-6, rtol=1e-6)
 
 
 @pytest.fixture(autouse=True)

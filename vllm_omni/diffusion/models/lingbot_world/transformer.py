@@ -73,6 +73,37 @@ class LingBotTransformerCache:
     cross_attention: list[LingBotAttentionCache | None]
 
 
+def _paged_window_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    *,
+    block_size: int,
+    softmax_scale: float,
+) -> torch.Tensor:
+    if block_size <= 0 or query.shape[0] != 1:
+        raise ValueError("Packed LingBot attention requires a positive page size and batch_size=1.")
+    tokens = key.shape[1]
+    padding = -tokens % block_size
+    # 初始化末页 padding，避免 masked GPU lane 读到未初始化数值。
+    packed_key = F.pad(key[0], (0, 0, 0, 0, 0, padding)) if padding else key[0]
+    packed_value = F.pad(value[0], (0, 0, 0, 0, 0, padding)) if padding else value[0]
+    key_cache = packed_key.unflatten(0, (-1, block_size))
+    value_cache = packed_value.unflatten(0, (-1, block_size))
+    block_table = torch.arange(key_cache.shape[0], dtype=torch.int32, device=query.device).unsqueeze(0)
+    return ar_diffusion_paged_attention(
+        query,
+        key_cache,
+        value_cache,
+        block_table=block_table,
+        query_start_loc=torch.tensor([0, query.shape[1]], dtype=torch.int32, device=query.device),
+        seq_lens=torch.tensor([tokens], dtype=torch.int32, device=query.device),
+        max_query_len=query.shape[1],
+        max_seq_len=tokens,
+        softmax_scale=softmax_scale,
+    )
+
+
 def allocate_lingbot_cache(
     *,
     batch_size: int,
@@ -235,6 +266,21 @@ class LingBotSelfAttention(nn.Module):
             skip_sequence_parallel=True,
         )
 
+    def _attend_window(
+        self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, preferred_block_tokens: int
+    ) -> torch.Tensor:
+        if (query.is_cuda or query.device.type == "npu") and query.shape[0] == 1:
+            from vllm_omni.experimental.ar_diffusion.runner import paging_block_size
+
+            return _paged_window_attention(
+                query,
+                key,
+                value,
+                block_size=paging_block_size(preferred_block_tokens),
+                softmax_scale=self.head_dim**-0.5,
+            )
+        return self.attn(query, key, value)
+
     def _update_cache(
         self,
         cache: LingBotAttentionCache,
@@ -386,7 +432,13 @@ class LingBotSelfAttention(nn.Module):
                 rotate=rotate,
                 reduce=reduce_stats,
             )
-            output = self.attn(query.unsqueeze(0), encoded_key.unsqueeze(0), value.unsqueeze(0))
+            # 与 FIFO 使用相同的分页 kernel，隔离历史合并本身的影响。
+            output = self._attend_window(
+                query.unsqueeze(0),
+                encoded_key.unsqueeze(0),
+                value.unsqueeze(0),
+                cache.tokens_per_frame,
+            )
             if update_cache:
                 cache.commit(query, key, value, spans)
         elif isinstance(cache, ARDiffusionPagedLayerInputs):
@@ -412,44 +464,7 @@ class LingBotSelfAttention(nn.Module):
                 sink_tokens=sink_tokens,
                 update_cache=update_cache,
             )
-            if (query.is_cuda or query.device.type == "npu") and query.shape[0] == 1:
-                # Package the visible window as a block table and call the
-                # same block-table entry point as the realtime path
-                # (FlashAttention on CUDA, the fused kernel on NPU) so direct
-                # replay is a numerical oracle for paged execution, rather
-                # than a comparison between two different attention kernels.
-                block_size = key.shape[1]
-                key_cache = visible_key[0].unflatten(0, (-1, block_size))
-                value_cache = visible_value[0].unflatten(0, (-1, block_size))
-                block_count = key_cache.shape[0]
-                block_table = torch.arange(
-                    block_count,
-                    dtype=torch.int32,
-                    device=query.device,
-                ).unsqueeze(0)
-                query_start_loc = torch.tensor(
-                    [0, query.shape[1]],
-                    dtype=torch.int32,
-                    device=query.device,
-                )
-                seq_lens = torch.tensor(
-                    [visible_key.shape[1]],
-                    dtype=torch.int32,
-                    device=query.device,
-                )
-                output = ar_diffusion_paged_attention(
-                    query,
-                    key_cache,
-                    value_cache,
-                    block_table=block_table,
-                    query_start_loc=query_start_loc,
-                    seq_lens=seq_lens,
-                    max_query_len=query.shape[1],
-                    max_seq_len=visible_key.shape[1],
-                    softmax_scale=self.head_dim**-0.5,
-                )
-            else:
-                output = self.attn(query, visible_key, visible_value)
+            output = self._attend_window(query, visible_key, visible_value, key.shape[1])
         if self.ulysses_world_size > 1:
             if _projection_lease is not None:
                 destination = _projection_lease.projection_input.unflatten(2, (40, 128))
