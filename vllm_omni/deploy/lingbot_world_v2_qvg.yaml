@@ -1,0 +1,38 @@
+# LingBot World v2 的可选 QVG 历史压缩配置；需要单独安装 QVG 核心包。
+# GPU 质量、时延和显存收益需要按具体模型与并行配置验证。
+
+pipeline: lingbot_world
+async_chunk: false
+distributed_executor_backend: mp
+dtype: bfloat16
+
+stages:
+  - stage_id: 0
+    devices: "0"
+    max_num_seqs: 1
+    enforce_eager: true
+    model_class_name: LingBotWorldCausalDMDPipeline
+    engine_backend: vllm_omni.experimental.ar_diffusion.engine.ARDiffusionEngine
+    step_execution: true
+    streaming_output: true
+    default_sampling_params:
+      num_inference_steps: 4
+      output_type: pil
+      extra_args:
+        flow_shift: 5.0
+    model_config:
+      lingbot_vae_spatial_sharding: true
+      ar_diffusion_height: 480
+      ar_diffusion_width: 832
+      ar_diffusion_kv_config:
+        gpu_memory_fraction: 0.6
+        warmup_cudagraph: false
+        compression:
+          method: qvg
+          bits: 4
+          num_stages: 1
+          group_size: 64
+          num_centroids: 256
+          kmeans_max_iters: 100
+          keep_recent_chunks: 1
+          seed: 0

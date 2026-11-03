@@ -137,6 +137,7 @@ class ARDiffusionKVCacheSpec:
     max_scratch_tokens_per_branch: int = 0
     model_owned_state_bytes_per_session: int = 0
     segmented: ARDiffusionSegmentedKVSpec | None = None
+    supported_history_compression: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         positive_fields = {

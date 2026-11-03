@@ -37,6 +37,7 @@ from vllm_omni.experimental.ar_diffusion.kv_cache.paged_attention import (
     ar_diffusion_paged_attention,
     paged_write_attn,
 )
+from vllm_omni.experimental.ar_diffusion.kv_cache.qvg import QVGLayerContext
 
 if TYPE_CHECKING:
     from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
@@ -66,7 +67,9 @@ class LingBotAttentionCache:
 class LingBotTransformerCache:
     """One request's per-layer video K/V and reusable text K/V."""
 
-    self_attention: list[LingBotAttentionCache | ARDiffusionPagedLayerContext | ARDiffusionPagedLayerInputs]
+    self_attention: list[
+        LingBotAttentionCache | ARDiffusionPagedLayerContext | ARDiffusionPagedLayerInputs | QVGLayerContext
+    ]
     cross_attention: list[LingBotAttentionCache | None]
 
 
@@ -317,7 +320,7 @@ class LingBotSelfAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         *,
-        cache: LingBotAttentionCache | ARDiffusionPagedLayerInputs,
+        cache: LingBotAttentionCache | ARDiffusionPagedLayerInputs | QVGLayerContext,
         current_start: int,
         rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
         sink_tokens: int,
@@ -353,7 +356,12 @@ class LingBotSelfAttention(nn.Module):
             )
             query, key, value = qkv.unbind(2)
 
-        if isinstance(cache, ARDiffusionPagedLayerInputs):
+        if isinstance(cache, QVGLayerContext):
+            if cache.forward_ctx.commit_current != update_cache:
+                raise RuntimeError("LingBot QVG commit state must match update_cache")
+            visible_key, visible_value = cache.read(current_start, key, value)
+            output = self.attn(query, visible_key, visible_value)
+        elif isinstance(cache, ARDiffusionPagedLayerInputs):
             if query.shape[0] != 1:
                 raise RuntimeError("LingBot AR-Diffusion paged attention requires batch_size=1.")
             output = paged_write_attn(
@@ -635,7 +643,7 @@ class LingBotAttentionBlock(nn.Module):
         timestep_projection: torch.Tensor,
         camera_hidden_states: torch.Tensor,
         *,
-        self_cache: LingBotAttentionCache | ARDiffusionPagedLayerInputs,
+        self_cache: LingBotAttentionCache | ARDiffusionPagedLayerInputs | QVGLayerContext,
         cross_cache: LingBotAttentionCache | None,
         current_start: int,
         sink_tokens: int,

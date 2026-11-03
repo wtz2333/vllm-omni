@@ -27,7 +27,7 @@ from vllm_omni.experimental.ar_diffusion.capability import (
     supports_chunk_step_grouping,
 )
 from vllm_omni.experimental.ar_diffusion.cell_schedule import cfg_step_replicas
-from vllm_omni.experimental.ar_diffusion.kv_cache.config import ARDiffusionKVConfig
+from vllm_omni.experimental.ar_diffusion.kv_cache.config import ARDiffusionKVConfig, QVGConfig
 from vllm_omni.experimental.ar_diffusion.kv_cache.manager import ARDiffusionKVCache
 from vllm_omni.experimental.ar_diffusion.kv_cache.noisy import NoisyKVCache, NoisyKVState
 from vllm_omni.experimental.ar_diffusion.kv_cache.state import ARDiffusionKVState
@@ -245,6 +245,8 @@ class ARDiffusionModelRunner(DiffusionModelRunner):
                 "step_execution=True would bypass per-request AR session binding."
             )
         if isinstance(self.pipeline, SupportsARDiffusionCellPipeline):
+            if self.ar_diffusion_kv_config.compression is not None:
+                raise ValueError("QVG history compression does not support noisy-KV cell pipelines")
             self._preallocate_noisy_kv(self.pipeline, available_bytes=available_bytes)
             return
         max_num_seqs = int(getattr(self.od_config, "max_num_seqs", 1) or 1)
@@ -264,6 +266,18 @@ class ARDiffusionModelRunner(DiffusionModelRunner):
             raise TypeError(
                 f"ar_diffusion_kv_cache_spec() must return ARDiffusionKVCacheSpec, got {type(spec).__name__}"
             )
+
+        compression = self.ar_diffusion_kv_config.compression
+        if compression is not None:
+            assert isinstance(compression, QVGConfig)
+            if compression.method not in spec.supported_history_compression:
+                raise ValueError("This pipeline does not support QVG history compression")
+            if not self.od_config.enforce_eager:
+                raise ValueError("QVG history compression currently requires enforce_eager=True")
+            if self.device.type != "cuda":
+                raise ValueError("QVG history compression currently requires a CUDA device")
+            if getattr(self.od_config, "diffusion_kv_cache_dtype", None) is not None:
+                raise ValueError("QVG history compression requires native floating-point attention precision")
 
         config = dataclasses.replace(
             self.ar_diffusion_kv_config,

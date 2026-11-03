@@ -50,3 +50,17 @@ def test_stage_declares_the_fixed_ar_cache_geometry() -> None:
     assert model_config["ar_diffusion_height"] == 480
     assert model_config["ar_diffusion_width"] == 832
     assert model_config["ar_diffusion_kv_config"]["gpu_memory_fraction"] == 0.6
+
+
+def test_qvg_profile_keeps_weight_quantization_independent() -> None:
+    from vllm_omni.experimental.ar_diffusion.kv_cache.config import ARDiffusionKVConfig, QVGConfig
+
+    deploy = load_deploy_config(get_deploy_config_path("lingbot_world_v2_qvg.yaml"))
+    stage = deploy.stages[0]
+    assert stage.enforce_eager is True
+    assert stage.max_num_seqs == 1 and stage.step_execution is True
+    assert stage.engine_extras["engine_backend"].endswith("ar_diffusion.engine.ARDiffusionEngine")
+    config = ARDiffusionKVConfig(**stage.engine_extras["model_config"]["ar_diffusion_kv_config"])
+    assert config.compression == QVGConfig()
+    assert not config.warmup_cudagraph
+    assert "quantization_config" not in stage.engine_extras

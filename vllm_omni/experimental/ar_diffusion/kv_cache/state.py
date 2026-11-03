@@ -17,6 +17,7 @@ from vllm_omni.experimental.ar_diffusion.kv_cache.paged_attention import (
     ARDiffusionPagedForwardContext,
     ARDiffusionPagedLayerContext,
 )
+from vllm_omni.experimental.ar_diffusion.kv_cache.qvg import QVGHistory, QVGLayerContext
 from vllm_omni.experimental.ar_diffusion.kv_cache.segmented import ARDiffusionSegmentedKVState
 
 if TYPE_CHECKING:
@@ -59,6 +60,7 @@ class ARDiffusionKVState:
         self._paged_pending: dict[str, ARDiffusionPagedForwardContext | None] = dict.fromkeys(expected)
         self._closed = False
         self._segments: dict[str, ARDiffusionSegmentedKVState] = {}
+        self._compressed: dict[str, QVGHistory] = {}
         self.conditioning_kv = ConditioningKVScope(kv_cache, session_id, num_layers)
 
     def segmented(self, kv_branch: str) -> ARDiffusionSegmentedKVState:
@@ -86,7 +88,7 @@ class ARDiffusionKVState:
         kv_branch: str,
         seq_len: int | None = None,
         commit_current: bool = False,
-    ) -> list[ARDiffusionPagedLayerContext]:
+    ) -> list[ARDiffusionPagedLayerContext] | list[QVGLayerContext]:
         if seq_len is None:
             raise ValueError("AR-Diffusion paged self-attention requires seq_len in get_kv_caches()")
         return self.prepare_paged_context(kv_branch, seq_len, commit_current)
@@ -96,7 +98,7 @@ class ARDiffusionKVState:
         kv_branch: str,
         seq_len: int,
         commit_current: bool,
-    ) -> list[ARDiffusionPagedLayerContext]:
+    ) -> list[ARDiffusionPagedLayerContext] | list[QVGLayerContext]:
         """Return per-layer paged attention contexts for one KV branch forward.
 
         Allocation is lazy so distributed workers allocate only for KV branches
@@ -104,6 +106,22 @@ class ARDiffusionKVState:
         """
         if self.kv_cache.segmented_spec is not None:
             raise RuntimeError("Segmented KV capabilities must use segmented() instead of frame-window contexts")
+        if self.kv_cache.config.compression is not None:
+            self.adapter(kv_branch)
+            if kv_branch not in self._compressed:
+                codec, workspace = self.kv_cache.qvg_codec, self.kv_cache.qvg_workspace
+                if codec is None or workspace is None:
+                    raise RuntimeError("QVG history requires initialized compression and attention workspace")
+                self._compressed[kv_branch] = QVGHistory(
+                    codec,
+                    num_layers=self.num_layers,
+                    tokens_per_frame=self.kv_cache.spec.chunk_size,
+                    window_tokens=self.kv_cache.spec.sliding_window,
+                    sink_tokens=self.kv_cache.spec.sink_chunks * self.kv_cache.spec.chunk_size,
+                    workspace=workspace,
+                    agree=self.kv_cache._agree_staging_allocation,
+                )
+            return self._compressed[kv_branch].prepare(int(seq_len), bool(commit_current))
         cs = self.kv_cache.spec.chunk_size
         if int(seq_len) % cs != 0:
             raise AssertionError(
@@ -139,7 +157,13 @@ class ARDiffusionKVState:
 
     def commit_paged_context(self, kv_branch: str) -> None:
         """Commit managed current blocks after one successful KV branch forward."""
-        self.adapter(kv_branch)
+        adapter = self.adapter(kv_branch)
+        if kv_branch in self._compressed:
+            tokens = self._compressed[kv_branch].commit()
+            for _ in range(tokens // self.kv_cache.spec.chunk_size):
+                adapter.on_chunk_committed()
+            self._committed[kv_branch] += tokens
+            return
         ctx = self._paged_pending.get(kv_branch)
         if ctx is None:
             return
@@ -260,6 +284,9 @@ class ARDiffusionKVState:
         for segments in self._segments.values():
             segments.close()
         self._segments.clear()
+        for history in self._compressed.values():
+            history.close()
+        self._compressed.clear()
         errors: list[Exception] = []
         for adapter in self.adapters.values():
             try:
@@ -288,6 +315,9 @@ class ARDiffusionKVState:
             for segments in self._segments.values():
                 segments.close()
             self._segments.clear()
+            for history in self._compressed.values():
+                history.close()
+            self._compressed.clear()
             for adapter in self.adapters.values():
                 self.kv_cache.end_request(adapter)
             self.kv_cache.retain_cross_attention(self.session_id, keep_cross_attention)

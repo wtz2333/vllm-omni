@@ -8,6 +8,7 @@ import math
 import sys
 from pathlib import Path
 from types import ModuleType, SimpleNamespace
+from typing import cast
 
 import pytest
 import torch
@@ -44,6 +45,7 @@ _STUBBED_MODULE_NAMES = (
     "vllm_omni.experimental.ar_diffusion",
     "vllm_omni.experimental.ar_diffusion.kv_cache",
     "vllm_omni.experimental.ar_diffusion.kv_cache.paged_attention",
+    "vllm_omni.experimental.ar_diffusion.kv_cache.qvg",
 )
 
 
@@ -58,9 +60,9 @@ def _install_vllm_stubs() -> None:
         sys.modules[name] = ModuleType(name)
 
     distributed = sys.modules["vllm.distributed"]
-    distributed.get_tensor_model_parallel_rank = lambda: 0
-    distributed.get_tensor_model_parallel_world_size = lambda: 1
-    distributed.tensor_model_parallel_all_reduce = lambda value: value
+    setattr(distributed, "get_tensor_model_parallel_rank", lambda: 0)
+    setattr(distributed, "get_tensor_model_parallel_world_size", lambda: 1)
+    setattr(distributed, "tensor_model_parallel_all_reduce", lambda value: value)
 
     class _SeqAllToAll4D:
         @staticmethod
@@ -132,9 +134,11 @@ def _install_vllm_stubs() -> None:
         for name, value in attrs.items():
             setattr(weight, name, value)
 
-    sys.modules["vllm.model_executor.utils"].set_weight_attrs = set_weight_attrs
-    sys.modules["vllm.model_executor.model_loader.weight_utils"].default_weight_loader = lambda param, loaded_weight: (
-        param.data.copy_(loaded_weight)
+    setattr(sys.modules["vllm.model_executor.utils"], "set_weight_attrs", set_weight_attrs)
+    setattr(
+        sys.modules["vllm.model_executor.model_loader.weight_utils"],
+        "default_weight_loader",
+        lambda param, loaded_weight: param.data.copy_(loaded_weight),
     )
 
     class _Linear(nn.Module):
@@ -165,8 +169,8 @@ def _install_vllm_stubs() -> None:
             return (output, self.bias) if self.return_bias else output
 
     linear = sys.modules["vllm.model_executor.layers.linear"]
-    linear.ColumnParallelLinear = _Linear
-    linear.RowParallelLinear = _Linear
+    setattr(linear, "ColumnParallelLinear", _Linear)
+    setattr(linear, "RowParallelLinear", _Linear)
 
     class _QKVLinear(nn.Module):
         def __init__(
@@ -206,19 +210,19 @@ def _install_vllm_stubs() -> None:
             self.calls += 1
             return F.linear(value, self.weight, self.bias), None
 
-    linear.QKVParallelLinear = _QKVLinear
+    setattr(linear, "QKVParallelLinear", _QKVLinear)
 
     class _Conv3dLayer(nn.Conv3d):
         def __init__(self, in_channels: int, out_channels: int, kernel_size, stride, **kwargs) -> None:
             super().__init__(in_channels, out_channels, kernel_size=kernel_size, stride=stride, **kwargs)
 
-    sys.modules["vllm.model_executor.layers.conv"].Conv3dLayer = _Conv3dLayer
+    setattr(sys.modules["vllm.model_executor.layers.conv"], "Conv3dLayer", _Conv3dLayer)
 
     class _LayerNorm(nn.LayerNorm):
         def __init__(self, dim: int, eps: float = 1e-6, elementwise_affine: bool = True) -> None:
             super().__init__(dim, eps=eps, elementwise_affine=elementwise_affine)
 
-    sys.modules["vllm_omni.diffusion.layers.norm"].LayerNorm = _LayerNorm
+    setattr(sys.modules["vllm_omni.diffusion.layers.norm"], "LayerNorm", _LayerNorm)
 
     class _Attention(nn.Module):
         def __init__(self, *args, softmax_scale: float, **kwargs) -> None:
@@ -241,7 +245,7 @@ def _install_vllm_stubs() -> None:
             weights = scores.softmax(dim=-1)
             return torch.einsum("bhqk,bkhd->bqhd", weights, value)
 
-    sys.modules["vllm_omni.diffusion.attention.layer"].Attention = _Attention
+    setattr(sys.modules["vllm_omni.diffusion.attention.layer"], "Attention", _Attention)
 
     class _RotaryEmbeddingWan(nn.Module):
         def __init__(self, *args, **kwargs) -> None:
@@ -253,7 +257,7 @@ def _install_vllm_stubs() -> None:
             self.calls.append((cos.detach().clone(), sin.detach().clone()))
             return value
 
-    sys.modules["vllm_omni.diffusion.layers.rope"].RotaryEmbeddingWan = _RotaryEmbeddingWan
+    setattr(sys.modules["vllm_omni.diffusion.layers.rope"], "RotaryEmbeddingWan", _RotaryEmbeddingWan)
 
     paged_attention = sys.modules["vllm_omni.experimental.ar_diffusion.kv_cache.paged_attention"]
 
@@ -263,13 +267,26 @@ def _install_vllm_stubs() -> None:
     class _PagedLayerInputs:
         pass
 
-    paged_attention.ARDiffusionPagedLayerContext = _PagedLayerContext
-    paged_attention.ARDiffusionPagedLayerInputs = _PagedLayerInputs
-    paged_attention.ar_diffusion_paged_attention = lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("CUDA paged attention was not expected in this CPU test")
+    setattr(paged_attention, "ARDiffusionPagedLayerContext", _PagedLayerContext)
+    setattr(paged_attention, "ARDiffusionPagedLayerInputs", _PagedLayerInputs)
+
+    class _QVGLayerContext:
+        pass
+
+    setattr(sys.modules["vllm_omni.experimental.ar_diffusion.kv_cache.qvg"], "QVGLayerContext", _QVGLayerContext)
+    setattr(
+        paged_attention,
+        "ar_diffusion_paged_attention",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("CUDA paged attention was not expected in this CPU test")
+        ),
     )
-    paged_attention.paged_write_attn = lambda *args, **kwargs: (_ for _ in ()).throw(
-        AssertionError("paged path was not expected in this direct-cache test")
+    setattr(
+        paged_attention,
+        "paged_write_attn",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            AssertionError("paged path was not expected in this direct-cache test")
+        ),
     )
 
 
@@ -290,7 +307,7 @@ def _load_module():
             if original is _MISSING_MODULE:
                 sys.modules.pop(name, None)
             else:
-                sys.modules[name] = original
+                sys.modules[name] = cast(ModuleType, original)
 
 
 def test_load_module_restores_process_module_state() -> None:
@@ -340,6 +357,7 @@ def _allocate_single_layer(module, *, max_tokens: int):
 
 def _set_identity_attention(attention: nn.Module) -> None:
     qkv = getattr(attention, "qkv", None)
+    projections: tuple[nn.Module, ...]
     if qkv is not None:
         projections = (qkv, attention.o)
     else:

@@ -34,6 +34,7 @@ from vllm_omni.experimental.ar_diffusion.capability import ARDiffusionKVBranchSp
 from vllm_omni.experimental.ar_diffusion.kv_cache.config import (
     KV_GATHER_ENV,
     ARDiffusionKVConfig,
+    QVGConfig,
     contiguous_kv_gather_enabled,
 )
 from vllm_omni.experimental.ar_diffusion.kv_cache.paged import (
@@ -45,6 +46,7 @@ from vllm_omni.experimental.ar_diffusion.kv_cache.paged import (
     resident_block_ids,
     visible_window_blocks,
 )
+from vllm_omni.experimental.ar_diffusion.kv_cache.qvg import QVGCodec
 from vllm_omni.experimental.ar_diffusion.kv_cache.segmented import SegmentedStaging
 
 _log = init_logger(__name__)
@@ -230,6 +232,27 @@ class ARDiffusionKVCache:
 
         self.config = config
         self.segmented_spec = segmented
+        self.qvg_codec: QVGCodec | None = None
+        self.qvg_workspace: tuple[torch.Tensor, torch.Tensor] | None = None
+        if config.compression is not None:
+            if segmented is not None or max_scratch_tokens_per_branch:
+                raise ValueError("QVG currently supports frame-window video KV without action scratch tokens")
+            compression = config.compression
+            assert isinstance(compression, QVGConfig)
+            tokens = config.chunk_size * frames_per_block
+            if head_size % compression.group_size or tokens < compression.num_centroids:
+                raise ValueError(
+                    "QVG requires head_size divisible by group_size and at least num_centroids chunk tokens"
+                )
+            packed_bytes = num_kv_heads * (
+                tokens * head_size * compression.bits // 8
+                + compression.num_stages * (4 * compression.num_centroids * head_size + tokens)
+                + tokens * head_size // compression.group_size
+            )
+            if packed_bytes > tokens * num_kv_heads * head_size * dtype.itemsize:
+                raise ValueError(
+                    "QVG metadata exceeds floating-point chunk storage; reduce num_centroids or num_stages"
+                )
         self._agree_staging_allocation = agree_staging_allocation or bool
         self.kv_branches = kv_branches
         self.requested_session_capacity = session_capacity
@@ -363,7 +386,15 @@ class ARDiffusionKVCache:
         # contiguous-gather attention path consumes it.
         self.history_staging_reserved_bytes = 0
         self.history_staging_tokens = 0
-        if segmented is not None:
+        if config.compression is not None:
+            self.history_staging_tokens = resident_frames * config.chunk_size
+            # 保留原有会话准入上限，另计单层读取工作区、部分可见 chunk 和压缩临时量。
+            self.history_staging_reserved_bytes = (
+                2 * self.history_staging_tokens * num_kv_heads * head_size * dtype.itemsize
+                + 4 * num_layers * frames_per_block * config.chunk_size * num_kv_heads * head_size * dtype.itemsize
+                + 32 * frames_per_block * config.chunk_size * num_kv_heads * head_size * 4
+            )
+        elif segmented is not None:
             self.history_staging_tokens = segmented.initial_staging_tokens
             self.history_staging_reserved_bytes = int(
                 2
@@ -498,6 +529,15 @@ class ARDiffusionKVCache:
 
     def _allocate_storage(self) -> None:
         if not self._allocate_tensors:
+            return
+        if self.config.compression is not None:
+            assert isinstance(self.config.compression, QVGConfig)
+            self.qvg_codec = QVGCodec(self.config.compression)
+            shape = (1, self.history_staging_tokens, self.num_kv_heads, self.head_size)
+            self.qvg_workspace = (
+                torch.empty(shape, dtype=self.dtype, device=self.device),
+                torch.empty(shape, dtype=self.dtype, device=self.device),
+            )
             return
         self._kv_pools, self._k_pools, self._v_pools = allocate_kv_pool_with_views(
             self.num_blocks_total,

@@ -125,6 +125,7 @@ The runner computes:
 ```text
 required(capacity) =
     scratch
+  + history_staging_reservation
   + managed_self_attention_pages(capacity)
   + capacity * cross_attention_bytes_per_session
   + capacity * model_owned_state_bytes_per_session
@@ -142,6 +143,15 @@ Otherwise the runner always admits one viable session and uses the configured
 fraction to select additional resident sessions up to the model-declared cap.
 All model-owned reservations are deducted before the paged self-attention pool
 is allocated.
+
+The optional QVG backend for LingBot retains the floating-point admission
+bound while replacing physical self-attention history pools with per-session
+compressed chunks. Its staging reservation covers one shared single-layer
+read workspace, partial-chunk retention, and compression temporaries. Clean
+chunks publish only after all layers and sequence-parallel workers succeed;
+failed compression preserves the previous history until the runner closes
+the failed session. The existing reset, cancellation, close, and eviction
+paths also release compressed and pending chunks. See [QVG](../../user_guide/quantization/qvg.md).
 
 LingBot advances a session-owned causal Wan VAE encoder for each condition
 block: the opening pixel frame is followed by four zero pixel frames per later

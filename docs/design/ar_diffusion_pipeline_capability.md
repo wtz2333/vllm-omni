@@ -21,6 +21,7 @@ A pipeline opts in by implementing `SupportsARDiffusionPipeline`. Its immutable
 - logical KV branches mapped to worker-local storage slots;
 - named fixed-length cross-attention KV, model-specific scratch geometry, and
   the pipeline's requested session-capacity upper bound.
+- optional supported history-compression methods, checked before storage allocation.
 
 The runner binds an `ARDiffusionKVState` only around one runner invocation
 (`execute_model` or `execute_stepwise`). The pipeline may use it during that
@@ -72,6 +73,28 @@ an uncommitted current video block, while `max_scratch_tokens_per_branch`
 declares the maximum model-specific tokens, such as action/state registers, that
 must coexist with it. `AR_DIFFUSION_KV_SCRATCH_BLOCKS_PER_BRANCH` may increase
 that derived minimum for deployment experiments but cannot reduce it.
+
+## Compressed history
+
+LingBot World v2 advertises `supported_history_compression=("qvg",)`.
+`ARDiffusionKVConfig.compression` selects this optional storage backend
+independently of Linear/weight quantization. Other pipelines reject the method
+unless their capability explicitly advertises it.
+
+QVG retains compressed, immutable generated chunks per session and logical
+branch. The runner allocates one shared, single-layer floating-point read
+workspace and no floating-point history pools. Clean-current K/V is private
+until every layer succeeds and the sequence-parallel workers agree to publish.
+Sink and recent chunks remain floating point; reads preserve absolute token
+positions and select the exact visible rows of partially retained chunks.
+Closing or resetting a session releases its compressed and pending chunks.
+
+Admission retains the ordinary floating-point capacity bound and adds
+reservations for chunk rounding, the read workspace, and compression
+temporaries. It does not infer additional session capacity from a nominal
+bit width. This initial path requires eager CUDA execution, native attention
+precision, and clean-x0 commits. See the [QVG guide](../user_guide/quantization/qvg.md)
+for dependencies, configuration, and validation limits.
 
 ## DreamZero adapter
 

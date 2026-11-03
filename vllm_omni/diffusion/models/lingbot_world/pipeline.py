@@ -627,6 +627,19 @@ class LingBotWorldCausalDMDPipeline(
             raise ValueError("model_config.lingbot_share_first_block_kv must be a bool.")
         if share_first_block and (reuse_last_step_kv or not od_config.enforce_eager):
             raise ValueError("First-block K/V sharing currently requires eager execution and clean-x0 K/V commits.")
+        raw_kv_config = getattr(od_config, "ar_diffusion_kv_config", None)
+        if raw_kv_config is None:
+            raw_kv_config = model_config.get("ar_diffusion_kv_config")
+        compression = (
+            raw_kv_config.get("compression")
+            if isinstance(raw_kv_config, dict)
+            else getattr(raw_kv_config, "compression", None)
+        )
+        if compression is not None:
+            if "ar_diffusion" not in str(getattr(od_config, "engine_backend", "")).lower():
+                raise ValueError("LingBot QVG requires ARDiffusionEngine to own history and session lifetime")
+            if not od_config.enforce_eager or reuse_last_step_kv or share_first_block:
+                raise ValueError("LingBot QVG requires eager clean-x0 commits without first-block K/V sharing")
         first_block_limit = model_config.get("lingbot_first_block_kv_cpu_limit_bytes", 4 << 30)
         if isinstance(first_block_limit, bool) or not isinstance(first_block_limit, int) or first_block_limit <= 0:
             raise ValueError("model_config.lingbot_first_block_kv_cpu_limit_bytes must be a positive integer.")
@@ -825,6 +838,7 @@ class LingBotWorldCausalDMDPipeline(
                 + 2 * self._condition_encoder_cache_bytes()  # Committed and in-flight histories.
                 + self._streaming_decode_bytes_per_session()
             ),
+            supported_history_compression=("qvg",),
         )
 
     def _condition_encoder_cache_bytes(self) -> int:

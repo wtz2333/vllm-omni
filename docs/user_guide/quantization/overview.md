@@ -14,6 +14,7 @@ For the internal architecture and backend extension points, see the
 | ------ | ------- | ------------- | --------- |
 | Online quantization | [Online Quantization](online.md) | vLLM-Omni computes quantized weights and scales while loading the model. | FP8 W8A8, Int8 W8A8, ConvRot W8A8/W4A4, BitsAndBytes W4, MXFP8 W8A8, MXFP4 W4A4 |
 | Runtime attention quantization | [Quantized KV Cache](quantized_kvcache.md) | vLLM-Omni dynamically quantizes eligible diffusion attention tensors during inference. | FP8, MXFP8, MXFP4 |
+| Video history compression | [QVG](qvg.md) | Optional committed-history compression for LingBot World v2; independent of weight quantization. | QVG INT2/INT4, experimental |
 | Pre-quantized checkpoints | Method-specific guides | The checkpoint or an offline quantizer provides quantized weights and scales before serving. | ModelOpt, AutoRound, TorchAO, msModelSlim, serialized Int8, offline MXFP8, offline MXFP4 DualScale |
 
 ## Hardware Support
