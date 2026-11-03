@@ -38,6 +38,13 @@ Cache methods trade minimal quality for significant speedup. Quality loss is typ
 MiniMax-H3 decode latency. It preserves the video encoder and audio VAE but
 can change generated pixels. Enable it with `additional_config.lightvae_decoder_path`.
 
+#### Autoregressive History Consolidation
+
+[FrameFold](diffusion/framefold.md) is an optional history KV policy for
+LingBot-World 2.0 causal-fast. It merges historical latent frames under a fixed
+entry budget. FIFO remains the default; FrameFold requires eager execution
+and clean-x0 commits. GPU quality and performance qualification is pending.
+
 #### Diffusion KV Prefix Caching
 
 [KV prefix caching](../design/feature/prefix_caching.md#diffusion-kv-prefix-caching)

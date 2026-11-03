@@ -143,6 +143,20 @@ fraction to select additional resident sessions up to the model-declared cap.
 All model-owned reservations are deducted before the paged self-attention pool
 is allocated.
 
+LingBot's optional [FrameFold policy](../../user_guide/diffusion/framefold.md)
+uses `ARDiffusionKVState.reserve_packed_history()` to reserve a fixed span from
+the same runner-owned pool. The returned layer buffers and slot mappings are
+borrowed for that session's lifetime. The model owns its per-layer merge
+metadata and pooled historical queries, and drops those references through
+the existing reset/close hooks. Packed history does not use FIFO slot
+advancement: `commit_packed_context()` records the absolute committed token
+count separately from the fixed physical reservation. A branch cannot mix
+packed history with frame-window contexts or segmented KV capabilities.
+Pre-RoPE keys remain in the pool; compact-position RoPE and fitting use bounded
+temporary workspace included in the model's memory reservation. A failed
+forward retires the session through the normal cleanup path. FIFO remains the
+default policy.
+
 LingBot advances a session-owned causal Wan VAE encoder for each condition
 block: the opening pixel frame is followed by four zero pixel frames per later
 latent frame. It retains one current condition block, with separate committed

@@ -24,6 +24,7 @@ from transformers import AutoTokenizer, UMT5EncoderModel
 from vllm.logger import init_logger
 from vllm.model_executor.models.utils import AutoWeightsLoader
 
+from vllm_omni.diffusion.cache.framefold import FrameFoldConfig
 from vllm_omni.diffusion.data import DiffusionOutput, OmniDiffusionConfig
 from vllm_omni.diffusion.distributed.autoencoders.autoencoder_kl_wan import DistributedAutoencoderKLWan
 from vllm_omni.diffusion.distributed.autoencoders.wan_decoder_fast_path import install_wan_decoder_fast_path
@@ -618,6 +619,9 @@ class LingBotWorldCausalDMDPipeline(
         self._lingbot_leased_post_attention = model_config.get("lingbot_npu_leased_post_attention", False)
         if type(self._lingbot_leased_post_attention) is not bool:
             raise ValueError("lingbot_npu_leased_post_attention must be a bool")
+        kv_policy = model_config.get("lingbot_kv_policy", "fifo")
+        if kv_policy not in ("fifo", "framefold"):
+            raise ValueError("model_config.lingbot_kv_policy must be 'fifo' or 'framefold'.")
         reuse_last_step_kv = model_config.get("lingbot_reuse_last_step_kv", False)
         if not isinstance(reuse_last_step_kv, bool):
             raise ValueError("model_config.lingbot_reuse_last_step_kv must be a bool.")
@@ -631,6 +635,15 @@ class LingBotWorldCausalDMDPipeline(
         if isinstance(first_block_limit, bool) or not isinstance(first_block_limit, int) or first_block_limit <= 0:
             raise ValueError("model_config.lingbot_first_block_kv_cpu_limit_bytes must be a positive integer.")
         self._first_block_kv_cpu_limit_bytes = first_block_limit if share_first_block else 0
+        if kv_policy == "framefold" and (
+            not od_config.enforce_eager
+            or reuse_last_step_kv
+            or share_first_block
+            or self._lingbot_leased_post_attention
+        ):
+            raise ValueError(
+                "FrameFold requires eager clean-x0 commits without first-block K/V sharing or leased post-attention."
+            )
         self.device = get_local_device()
         dtype = getattr(od_config, "dtype", torch.bfloat16)
         model = od_config.model
@@ -687,6 +700,12 @@ class LingBotWorldCausalDMDPipeline(
             quant_config=getattr(od_config, "quantization_config", None),
             prefix="transformer",
         )
+        if kv_policy == "framefold":
+            config = self.transformer.config
+            window = config.local_attn_size if config.local_attn_size != -1 else config.sliding_window_num_frames
+            framefold_config = FrameFoldConfig(budget_frames=int(window), sink_frames=int(config.sink_size))
+            framefold_config.validate_block(int(config.num_frames_per_block))
+            self.transformer.framefold_config = framefold_config
 
         scheduler_config = _load_json(model, "scheduler/scheduler_config.json", local_files_only)
         _validate_scheduler_config(scheduler_config)
@@ -724,6 +743,7 @@ class LingBotWorldCausalDMDPipeline(
         # normal inference. Weight or adapter mutation must advance this token.
         self._conditioning_projection_revision = 0
         self._ar_sessions: dict[str, _LingBotARSessionState] = {}
+        self._framefold_sessions: dict[str, LingBotTransformerCache] = {}
         # Text encodes keyed by what they depend on; see encode_prompt.
         self._prompt_embeds_cache: OrderedDict[tuple[str, int, torch.dtype], torch.Tensor] = OrderedDict()
         # One temporal decoder cache per stepwise session, keyed the way the
@@ -800,6 +820,20 @@ class LingBotWorldCausalDMDPipeline(
             * int(self.transformer.config.attention_head_dim)
             * element_size
         )
+        framefold_bytes = 0
+        framefold_config = getattr(self.transformer, "framefold_config", None)
+        if framefold_config is not None:
+            heads = int(self.transformer.blocks[0].self_attn.num_sp_heads)
+            dim = int(self.transformer.config.attention_head_dim)
+            pooled = math.ceil((latent_height // patch_height) / framefold_config.pooling_factor) * math.ceil(
+                (latent_width // patch_width) / framefold_config.pooling_factor
+            )
+            # 预留所有层的近期 Q，以及单层拟合、attention 和重复合并的有界工作空间。
+            framefold_bytes = 4 * (
+                int(self.transformer.config.num_layers) * framefold_config.recent_frames * pooled * heads * dim
+                + 12 * total_window_frames * tokens_per_frame * heads * dim
+                + 8 * total_window_frames * heads * pooled * pooled
+            )
         return ARDiffusionKVCacheSpec(
             num_layers=int(self.transformer.config.num_layers),
             num_kv_heads=int(self.transformer.blocks[0].self_attn.num_sp_heads),
@@ -824,6 +858,7 @@ class LingBotWorldCausalDMDPipeline(
                 + camera_bytes_per_session
                 + 2 * self._condition_encoder_cache_bytes()  # Committed and in-flight histories.
                 + self._streaming_decode_bytes_per_session()
+                + framefold_bytes
             ),
         )
 
@@ -904,6 +939,8 @@ class LingBotWorldCausalDMDPipeline(
             self._ar_diffusion_kv_state = None
 
     def _release_condition_encoder_state(self, session_id: str) -> None:
+        if hasattr(self, "_framefold_sessions"):
+            self._framefold_sessions.pop(session_id, None)
         state = self._ar_sessions.pop(session_id, None)
         if state is not None:
             state.encoder_cache = None
@@ -1463,7 +1500,30 @@ class LingBotWorldCausalDMDPipeline(
         state = self._ar_diffusion_kv_state
         if state is None:
             raise RuntimeError("LingBot AR cache requested without a bound state.")
-        return ARBlockContext(state=state, cross_attention=cross_attention, branch=self._AR_BRANCH)
+        framefold_cache = None
+        framefold_config = getattr(self.transformer, "framefold_config", None)
+        if framefold_config is not None:
+            framefold_cache = self._framefold_sessions.get(state.session_id)
+            if framefold_cache is None:
+                buffers = state.reserve_packed_history(
+                    self._AR_BRANCH,
+                    framefold_config.budget_frames * state.kv_cache.spec.chunk_size,
+                )
+                framefold_cache = self.transformer.allocate_cache(
+                    batch_size=1,
+                    latent_height=self._ar_height // self.vae_scale_factor_spatial,
+                    latent_width=self._ar_width // self.vae_scale_factor_spatial,
+                    device=self.device,
+                    dtype=self.transformer.dtype,
+                    kv_buffers=buffers,
+                )
+                self._framefold_sessions[state.session_id] = framefold_cache
+        return ARBlockContext(
+            state=state,
+            cross_attention=cross_attention,
+            branch=self._AR_BRANCH,
+            framefold_cache=framefold_cache,
+        )
 
     def _generate_block(
         self,

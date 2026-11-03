@@ -26,6 +26,7 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.model_executor.utils import set_weight_attrs
 
 from vllm_omni.diffusion.attention.layer import Attention
+from vllm_omni.diffusion.cache.framefold import FrameFoldConfig, FrameFoldLayerCache
 from vllm_omni.diffusion.distributed.comm import SeqAllToAll4D, all_to_all_4D, all_to_all_5D
 from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
 from vllm_omni.diffusion.distributed.sp_plan import SequenceParallelInput, SequenceParallelOutput
@@ -66,7 +67,9 @@ class LingBotAttentionCache:
 class LingBotTransformerCache:
     """One request's per-layer video K/V and reusable text K/V."""
 
-    self_attention: list[LingBotAttentionCache | ARDiffusionPagedLayerContext | ARDiffusionPagedLayerInputs]
+    self_attention: list[
+        LingBotAttentionCache | ARDiffusionPagedLayerContext | ARDiffusionPagedLayerInputs | FrameFoldLayerCache
+    ]
     cross_attention: list[LingBotAttentionCache | None]
 
 
@@ -317,7 +320,7 @@ class LingBotSelfAttention(nn.Module):
         self,
         hidden_states: torch.Tensor,
         *,
-        cache: LingBotAttentionCache | ARDiffusionPagedLayerInputs,
+        cache: LingBotAttentionCache | ARDiffusionPagedLayerInputs | FrameFoldLayerCache,
         current_start: int,
         rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
         sink_tokens: int,
@@ -334,7 +337,7 @@ class LingBotSelfAttention(nn.Module):
         query = query.unflatten(2, (self.num_local_heads, self.head_dim))
         key = key.unflatten(2, (self.num_local_heads, self.head_dim))
         value = value.unflatten(2, (self.num_local_heads, self.head_dim))
-        if rotary_emb is not None:
+        if rotary_emb is not None and not isinstance(cache, FrameFoldLayerCache):
             cos, sin = rotary_emb
             query = self.rotary_embedding(query, cos, sin)
             key = self.rotary_embedding(key, cos, sin)
@@ -353,7 +356,40 @@ class LingBotSelfAttention(nn.Module):
             )
             query, key, value = qkv.unbind(2)
 
-        if isinstance(cache, ARDiffusionPagedLayerInputs):
+        if isinstance(cache, FrameFoldLayerCache):
+            if query.shape[0] != 1:
+                raise ValueError("FrameFold requires batch_size=1.")
+
+            def rotate(grid: torch.Tensor, start: int) -> torch.Tensor:
+                cosine, sine = cache.rope(
+                    frames=grid.shape[0],
+                    height=cache.height,
+                    width=cache.width,
+                    start_frame=start,
+                    dtype=grid.dtype,
+                    device=grid.device,
+                )
+                return self.rotary_embedding(grid.flatten(0, 1).unsqueeze(0), cosine, sine)[0].reshape_as(grid)
+
+            def reduce_stats(stats: torch.Tensor) -> torch.Tensor:
+                if get_tensor_model_parallel_world_size() > 1:
+                    stats = tensor_model_parallel_all_reduce(stats)
+                if self.ulysses_world_size > 1:
+                    torch.distributed.all_reduce(stats, group=self.ulysses_group)
+                return stats
+
+            query, encoded_key, key, value, spans = cache.prepare(
+                query[0],
+                key[0],
+                value[0],
+                current_start=current_start,
+                rotate=rotate,
+                reduce=reduce_stats,
+            )
+            output = self.attn(query.unsqueeze(0), encoded_key.unsqueeze(0), value.unsqueeze(0))
+            if update_cache:
+                cache.commit(query, key, value, spans)
+        elif isinstance(cache, ARDiffusionPagedLayerInputs):
             if query.shape[0] != 1:
                 raise RuntimeError("LingBot AR-Diffusion paged attention requires batch_size=1.")
             output = paged_write_attn(
@@ -635,7 +671,7 @@ class LingBotAttentionBlock(nn.Module):
         timestep_projection: torch.Tensor,
         camera_hidden_states: torch.Tensor,
         *,
-        self_cache: LingBotAttentionCache | ARDiffusionPagedLayerInputs,
+        self_cache: LingBotAttentionCache | ARDiffusionPagedLayerInputs | FrameFoldLayerCache,
         cross_cache: LingBotAttentionCache | None,
         current_start: int,
         sink_tokens: int,
@@ -834,6 +870,7 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
     _repeated_blocks = ["LingBotAttentionBlock"]
     packed_modules_mapping = {"qkv": ["q", "k", "v"]}
     _layerwise_offload_blocks_attrs = ["blocks"]
+    framefold_config: FrameFoldConfig | None = None
     _sp_plan = {
         "sp_prepare": {
             0: SequenceParallelInput(split_dim=1, expected_dims=3, split_output=True),
@@ -1065,6 +1102,7 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
         latent_width: int,
         device: torch.device,
         dtype: torch.dtype,
+        kv_buffers: list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]] | None = None,
     ) -> LingBotTransformerCache:
         """Allocate one caller-owned cache using this transformer's geometry."""
 
@@ -1092,6 +1130,34 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
         )
         max_tokens = int(window_frames * post_patch_height * post_patch_width)
         num_local_heads = self.blocks[0].self_attn.num_sp_heads
+        if self.framefold_config is not None:
+            if batch_size != 1:
+                raise ValueError("FrameFold requires batch_size=1.")
+            if kv_buffers is not None and len(kv_buffers) != self.config.num_layers:
+                raise ValueError("FrameFold KV buffers must match the transformer layer count.")
+            layers = []
+            for index in range(self.config.num_layers):
+                if kv_buffers is None:
+                    shape = (max_tokens, num_local_heads, self.config.attention_head_dim)
+                    key = torch.empty(shape, dtype=dtype, device=device)
+                    value = torch.empty_like(key)
+                    slots = None
+                else:
+                    key, value, slots = kv_buffers[index]
+                layers.append(
+                    FrameFoldLayerCache(
+                        self.framefold_config,
+                        key,
+                        value,
+                        slots=slots,
+                        height=post_patch_height,
+                        width=post_patch_width,
+                        rope=self._rotary_embedding,
+                    )
+                )
+            return LingBotTransformerCache(self_attention=layers, cross_attention=[None] * self.config.num_layers)
+        if kv_buffers is not None:
+            raise ValueError("Packed KV buffers require FrameFold.")
         return allocate_lingbot_cache(
             batch_size=batch_size,
             num_layers=self.config.num_layers,

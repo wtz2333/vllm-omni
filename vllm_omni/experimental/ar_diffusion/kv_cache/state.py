@@ -57,6 +57,7 @@ class ARDiffusionKVState:
         self.num_layers = num_layers
         self._committed: dict[str, int] = dict.fromkeys(expected, 0)
         self._paged_pending: dict[str, ARDiffusionPagedForwardContext | None] = dict.fromkeys(expected)
+        self._packed_slots: dict[str, torch.Tensor] = {}
         self._closed = False
         self._segments: dict[str, ARDiffusionSegmentedKVState] = {}
         self.conditioning_kv = ConditioningKVScope(kv_cache, session_id, num_layers)
@@ -91,6 +92,37 @@ class ARDiffusionKVState:
             raise ValueError("AR-Diffusion paged self-attention requires seq_len in get_kv_caches()")
         return self.prepare_paged_context(kv_branch, seq_len, commit_current)
 
+    def reserve_packed_history(
+        self, kv_branch: str, num_tokens: int
+    ) -> list[tuple[torch.Tensor, torch.Tensor, torch.Tensor]]:
+        adapter = self.adapter(kv_branch)
+        if self.kv_cache.segmented_spec is not None:
+            raise RuntimeError("Segmented KV capabilities cannot reserve packed frame history.")
+        capacity = self.kv_cache.spec.sliding_window + self.kv_cache.spec.sink_chunks * self.kv_cache.spec.chunk_size
+        if num_tokens <= 0 or num_tokens > capacity:
+            raise ValueError("Packed AR history must fit the declared resident KV capacity.")
+        slots = self._packed_slots.get(kv_branch)
+        if slots is None:
+            if self._committed[kv_branch] or self._paged_pending[kv_branch] is not None:
+                raise RuntimeError("Cannot mix packed history with frame-window KV in one branch.")
+            # 固定预留不执行 FIFO 淘汰；模型时间由已提交 token 数独立记录。
+            table = self.kv_cache.allocate_token_slots(adapter, num_tokens)
+            device = self.kv_cache.key_cache(0).device
+            slots = compute_slot_mapping(table, range(num_tokens), self.kv_cache.block_size).to(device)
+            self._packed_slots[kv_branch] = slots
+        elif slots.numel() != num_tokens:
+            raise ValueError("Packed AR history capacity cannot change within a session.")
+        return [
+            (self.kv_cache.key_cache(i).flatten(0, 1), self.kv_cache.value_cache(i).flatten(0, 1), slots)
+            for i in range(self.num_layers)
+        ]
+
+    def commit_packed_context(self, kv_branch: str, seq_len: int) -> None:
+        self.adapter(kv_branch)
+        if kv_branch not in self._packed_slots or seq_len <= 0 or seq_len % self.kv_cache.spec.chunk_size:
+            raise ValueError("Packed AR commit requires a reservation and a positive frame-aligned token count.")
+        self._committed[kv_branch] += seq_len
+
     def prepare_paged_context(
         self,
         kv_branch: str,
@@ -105,6 +137,8 @@ class ARDiffusionKVState:
         if self.kv_cache.segmented_spec is not None:
             raise RuntimeError("Segmented KV capabilities must use segmented() instead of frame-window contexts")
         cs = self.kv_cache.spec.chunk_size
+        if kv_branch in self._packed_slots:
+            raise RuntimeError("Packed history cannot use frame-window KV contexts.")
         if int(seq_len) % cs != 0:
             raise AssertionError(
                 f"AR-Diffusion expects frame-aligned seq_len (multiple of chunk_size={cs}), got {seq_len}"
@@ -269,6 +303,7 @@ class ARDiffusionKVState:
         self.kv_cache.release_cross_attention(self.session_id)
         self.conditioning_kv.close()
         self._paged_pending = dict.fromkeys(self.adapters)
+        self._packed_slots.clear()
         self._closed = True
         if errors:
             raise errors[0]
@@ -299,6 +334,7 @@ class ARDiffusionKVState:
         }
         self._committed = dict.fromkeys(self.adapters, 0)
         self._paged_pending = dict.fromkeys(self.adapters)
+        self._packed_slots.clear()
         self._closed = False
         if not keep_cross_attention:
             self.conditioning_kv = ConditioningKVScope(self.kv_cache, self.session_id, self.num_layers)

@@ -54,6 +54,7 @@ class ARBlockContext:
     state: ARDiffusionKVState
     cross_attention: list[LingBotAttentionCache]
     branch: str
+    framefold_cache: LingBotTransformerCache | None = None
 
 
 class LingBotDMDBlockRunner:
@@ -73,6 +74,10 @@ class LingBotDMDBlockRunner:
         self.enforce_eager = enforce_eager
         # Experimental approximation: cache x_t/t_last features instead of x0/t=0.
         self.reuse_last_step_kv = reuse_last_step_kv
+        if getattr(transformer, "framefold_config", None) is not None and (
+            not enforce_eager or reuse_last_step_kv or first_block_kv_cpu_limit_bytes
+        ):
+            raise ValueError("FrameFold requires eager clean-x0 commits without first-block K/V sharing.")
         self.first_block_kv = (
             FirstBlockKVStore(max_bytes=first_block_kv_cpu_limit_bytes) if first_block_kv_cpu_limit_bytes else None
         )
@@ -93,6 +98,9 @@ class LingBotDMDBlockRunner:
         ar: ARBlockContext,
         commit_current: bool,
     ) -> LingBotTransformerCache:
+        if ar.framefold_cache is not None:
+            ar.framefold_cache.cross_attention = ar.cross_attention
+            return ar.framefold_cache
         patch_frames, patch_height, patch_width = self.transformer.config.patch_size
         frames = condition.shape[2] // patch_frames
         height = condition.shape[3] // patch_height
@@ -269,7 +277,16 @@ class LingBotDMDBlockRunner:
             camera_modulation_cache=camera_cache,
         )
         if ar is not None:
-            ar.state.commit_paged_context(ar.branch)
+            if ar.framefold_cache is None:
+                ar.state.commit_paged_context(ar.branch)
+            else:
+                patch_frames, patch_height, patch_width = self.transformer.config.patch_size
+                seq_len = (
+                    (condition.shape[2] // patch_frames)
+                    * (condition.shape[3] // patch_height)
+                    * (condition.shape[4] // patch_width)
+                )
+                ar.state.commit_packed_context(ar.branch, seq_len)
             if first_block_key is not None and build_generation is not None:
                 assert store is not None
                 layers = ar.state.snapshot_first_block(ar.branch, first_block_key.token_count)
