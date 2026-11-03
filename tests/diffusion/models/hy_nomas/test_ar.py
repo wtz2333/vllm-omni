@@ -2,14 +2,16 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 
 import json
-from contextlib import nullcontext
+from contextlib import contextmanager, nullcontext
 from dataclasses import replace
+from datetime import timedelta
 from pathlib import Path
 from types import SimpleNamespace
 
 import numpy as np
 import pytest
 import torch
+import torch.distributed as dist
 from torch import nn
 from vllm.utils.torch_utils import set_default_torch_dtype
 
@@ -44,6 +46,7 @@ class DecoderStub:
     def __init__(self, hold_frames=3):
         self.hold_frames = hold_frames
         self.available_pixel_frames = 0
+        self.committed_pixel_frames = 0
         self.pending = torch.empty((1, 3, 0, 32, 32))
         self.finished = False
 
@@ -53,12 +56,14 @@ class DecoderStub:
         self.pending = torch.cat((self.pending, frames), 2)
         self.available_pixel_frames += pixel_frames
         stable, self.pending = self.pending[:, :, : -self.hold_frames], self.pending[:, :, -self.hold_frames :]
+        self.committed_pixel_frames += stable.shape[2]
         return stable
 
     def finish(self):
         assert not self.finished
         self.finished = True
         tail, self.pending = self.pending, self.pending[:, :, :0]
+        self.committed_pixel_frames += tail.shape[2]
         return tail
 
 
@@ -102,6 +107,7 @@ class PipelineWithCPUComponents(HyNomasPipeline):
         self.fail_clean = False
         self.device = torch.device("cpu")
         self.sp_size = 1
+        self.decoder_parallel_mode = "none"
         self._cpu_offload = False
 
     def _encode_prompt(self, text, *args, **kwargs):
@@ -122,7 +128,7 @@ class PipelineWithCPUComponents(HyNomasPipeline):
     def transformer_forward(self, **kwargs):
         hidden = kwargs["hidden_states"]
         start = kwargs["cache_valid_len"]
-        image = hidden.shape[2]
+        image = hidden.shape[2] * hidden.shape[3] * hidden.shape[4]
         count = image + (kwargs["text_states"].shape[1] if kwargs["cache_txt"] else 0)
         self.calls.append(
             {
@@ -338,6 +344,258 @@ def test_continuation_keeps_real_kv_noise_and_decoder_timeline(runner):
     assert calls[5]["mask"].tolist() == [[True, True, True, True, True, False, False]]
 
 
+@pytest.mark.parametrize("rank", [0, 1, 3, 7, 15])
+def test_window_decoder_tracks_committed_frames_on_every_rank(runner, monkeypatch, rank):
+    class RankDecoder(DecoderStub):
+        def push(self, latent, *, pixel_frames):
+            stable = super().push(latent, pixel_frames=pixel_frames)
+            return stable if rank == 0 else stable.new_empty((0,))
+
+        def finish(self):
+            tail = super().finish()
+            return tail if rank == 0 else tail.new_empty((0,))
+
+    pipeline = runner.pipeline
+    pipeline.decoder_parallel_mode = "window"
+    pipeline.vae.create_streaming_decode_session = lambda **kwargs: RankDecoder()
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.models.hy_nomas.pipeline_hy_nomas.get_sp_group",
+        lambda: SimpleNamespace(ulysses_rank=rank),
+    )
+    first = execute(runner, batch())
+    session = pipeline._ar_sessions["s"]
+    assert session.emitted_frames == session.decoder.committed_pixel_frames == 6
+    assert len(first.output["payload"]["video"]) == (6 if rank == 0 else 0)
+    second = execute(runner, batch(index=1, close=True))
+    assert session.emitted_frames == session.decoder.committed_pixel_frames == 18
+    assert second.output["metadata"]["stream"]["frame_start"] == 6
+    assert second.output["metadata"]["stream"]["withheld_frames"] == 0
+    assert len(second.output["payload"]["video"]) == (12 if rank == 0 else 0)
+
+
+def test_window_decoder_rejects_incorrect_output_frame_count(runner, monkeypatch):
+    class BadDecoder(DecoderStub):
+        def push(self, latent, *, pixel_frames):
+            stable = super().push(latent, pixel_frames=pixel_frames)
+            self.committed_pixel_frames += 1
+            return stable
+
+    pipeline = runner.pipeline
+    pipeline.decoder_parallel_mode = "window"
+    pipeline.vae.create_streaming_decode_session = lambda **kwargs: BadDecoder()
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.models.hy_nomas.pipeline_hy_nomas.get_sp_group",
+        lambda: SimpleNamespace(ulysses_rank=0),
+    )
+    with pytest.raises(RuntimeError, match="committed frame positions"):
+        execute(runner, batch())
+    assert not runner._sessions and not pipeline._ar_sessions
+
+
+def test_window_decoder_rejects_inconsistent_session_position(runner, monkeypatch):
+    pipeline = runner.pipeline
+    pipeline.decoder_parallel_mode = "window"
+    monkeypatch.setattr(
+        "vllm_omni.diffusion.models.hy_nomas.pipeline_hy_nomas.get_sp_group",
+        lambda: SimpleNamespace(ulysses_rank=0),
+    )
+    execute(runner, batch())
+    pipeline._ar_sessions["s"].decoder.committed_pixel_frames += 1
+    with pytest.raises(RuntimeError, match="frame positions disagree"):
+        execute(runner, batch(index=1))
+    assert not runner._sessions and not pipeline._ar_sessions
+
+
+def _window_pipeline_worker(rank, world_size, rendezvous, result_path):
+    from hymm.models.vae.pixelumm_decoder.autoencoder import PixelUMMDCAELatentDecoder
+
+    class TinyDecoder(nn.Module):
+        local_attention_tile = 0
+
+        def __init__(self):
+            super().__init__()
+            self.scale = nn.Parameter(torch.tensor(0.5))
+
+        def forward(self, latent, noise):
+            pixels = latent[:, :1].repeat(1, 3, 1, 1, 1)
+            pixels = pixels.repeat_interleave(4, 2).repeat_interleave(32, 3).repeat_interleave(32, 4)
+            return pixels + self.scale * noise
+
+    dist.init_process_group(
+        "gloo",
+        init_method=f"file://{rendezvous}",
+        rank=rank,
+        world_size=world_size,
+        timeout=timedelta(seconds=120),
+    )
+    try:
+        torch.set_num_threads(1)
+
+        def all_reduce(value):
+            dist.all_reduce(value)
+            return value
+
+        group = SimpleNamespace(
+            ulysses_rank=rank,
+            ulysses_group=dist.group.WORLD,
+            world_size=world_size,
+            cpu_group=dist.group.WORLD,
+            all_reduce=all_reduce,
+        )
+        with pytest.MonkeyPatch.context() as patch:
+            patch.setattr("vllm_omni.diffusion.models.hy_nomas.pipeline_hy_nomas.get_sp_group", lambda: group)
+            patch.setattr("vllm_omni.diffusion.distributed.parallel_state.get_sp_group", lambda: group)
+            patch.setattr(
+                "vllm_omni.experimental.ar_diffusion.runner.current_omni_platform",
+                SimpleNamespace(synchronize=lambda: None),
+            )
+            outputs = {}
+            offline_outputs = {}
+            positions = {}
+            for mode in ("none", "window"):
+                pipeline = PipelineWithCPUComponents()
+                pipeline.sp_size = world_size
+                pipeline.heads_num = world_size
+                pipeline.hidden_size = 4 * world_size
+                pipeline.decoder_parallel_mode = mode
+                pipeline.vae = PixelUMMDCAELatentDecoder(
+                    TinyDecoder(),
+                    temporal_window_latents=4,
+                    temporal_overlap_latents=2,
+                    decoder_tile_pixels=0,
+                    decoder_tile_overlap_pixels=0,
+                )
+                if mode == "window":
+                    pipeline.vae.configure_distributed_decode("window", process_group=dist.group.WORLD)
+                pipeline.initialize_ar(
+                    {
+                        "ar_height": 128,
+                        "ar_width": 128,
+                        "ar_chunk_latent_frames": 3,
+                        "ar_max_latent_frames": 12,
+                        "ar_max_segments": 4,
+                        "ar_session_capacity": 1,
+                    }
+                )
+                runner = make_runner(pipeline)
+                videos, starts, committed = [], [], []
+                for index in range(3):
+                    tick = ARDiffusionTickRequest(
+                        "s",
+                        f"request-{index}",
+                        index,
+                        (index,),
+                        "forest",
+                        (),
+                        close_session=index == 2,
+                    )
+                    params = OmniDiffusionSamplingParams(
+                        num_frames=9,
+                        height=128,
+                        width=128,
+                        seed=7,
+                        num_inference_steps=4,
+                        guidance_scale=1,
+                        extra_args=tick.to_extra_args(),
+                    )
+                    request = DiffusionRequestBatch(
+                        requests=[
+                            OmniDiffusionRequest(
+                                prompt="forest",
+                                sampling_params=params,
+                                request_id=tick.request_id,
+                            )
+                        ]
+                    )
+                    with runner._bound_ar_session("s", description="window integration"):
+                        output = pipeline.forward(request)
+                    videos.append(output.output["payload"]["video"])
+                    starts.append(output.output["metadata"]["stream"]["frame_start"])
+                    committed.append(pipeline._ar_sessions["s"].emitted_frames)
+                outputs[mode] = np.concatenate(videos, axis=0)
+                positions[mode] = {"starts": starts, "committed": committed}
+                runner.close_session("s")
+                offline_request = DiffusionRequestBatch(
+                    requests=[
+                        OmniDiffusionRequest(
+                            prompt="forest",
+                            sampling_params=OmniDiffusionSamplingParams(
+                                num_frames=17,
+                                height=128,
+                                width=128,
+                                seed=7,
+                                num_inference_steps=4,
+                                guidance_scale=1,
+                            ),
+                            request_id="offline",
+                        )
+                    ]
+                )
+                offline = pipeline.forward(offline_request)
+                offline_outputs[mode] = None if offline.media is None else offline.media.video.tensor
+                if mode == "window":
+                    failing_request = DiffusionRequestBatch(
+                        requests=[
+                            OmniDiffusionRequest(
+                                prompt="forest",
+                                sampling_params=OmniDiffusionSamplingParams(
+                                    num_frames=25,
+                                    height=128,
+                                    width=128,
+                                    seed=7,
+                                    num_inference_steps=4,
+                                    guidance_scale=1,
+                                    extra_args={"session_id": "failed", "close_session": True},
+                                ),
+                                request_id="failed",
+                            )
+                        ]
+                    )
+                    original_forward = pipeline.vae.decoder.forward
+
+                    def fail_window(*args, **kwargs):
+                        raise RuntimeError("injected window failure")
+
+                    if rank == 1:
+                        pipeline.vae.decoder.forward = fail_window
+                    with pytest.raises(RuntimeError, match="window failure|another decode rank|another SP rank"):
+                        with runner._bound_ar_session("failed", description="window failure"):
+                            pipeline.forward(failing_request)
+                    pipeline.vae.decoder.forward = original_forward
+                    assert "failed" not in runner._sessions and "failed" not in pipeline._ar_sessions
+                    with runner._bound_ar_session("failed", description="window recovery"):
+                        recovered_stream = pipeline.forward(failing_request)
+                    assert len(recovered_stream.output["payload"]["video"]) == (25 if rank == 0 else 0)
+                    runner.close_session("failed")
+
+                    @contextmanager
+                    def failing_context(component):
+                        yield
+                        if rank == 1 and component is pipeline.vae:
+                            raise RuntimeError("injected component release failure")
+
+                    with pytest.MonkeyPatch.context() as failure_patch:
+                        failure_patch.setattr(pipeline, "_component_context", failing_context)
+                        with pytest.raises(RuntimeError, match="component release failure|another SP rank"):
+                            pipeline.forward(offline_request)
+                    recovered = pipeline.forward(offline_request)
+                    assert (recovered.media is not None) == (rank == 0)
+            if rank == 0:
+                assert np.array_equal(outputs["none"], outputs["window"])
+                assert outputs["window"].shape == (27, 128, 128, 3)
+                assert torch.equal(offline_outputs["none"], offline_outputs["window"])
+            else:
+                assert outputs["window"].shape == (0, 128, 128, 3)
+                assert offline_outputs["window"] is None
+            assert positions["none"] == positions["window"]
+            gathered = [None] * world_size
+            dist.all_gather_object(gathered, positions["window"])
+            if rank == 0:
+                Path(result_path).write_text(json.dumps(gathered))
+    finally:
+        dist.destroy_process_group()
+
+
 def test_interleaved_sessions_restore_their_own_pages(runner):
     execute(runner, batch())
     execute(runner, batch(session="other", seed=19), "other")
@@ -515,7 +773,10 @@ def test_empty_decoder_chunk_preserves_tick_metadata(runner):
     assert len(execute(runner, batch(index=1, close=True)).output["payload"]["video"]) == 18
 
 
-def test_public_deploy_resolution_preserves_ar_configuration(tmp_path):
+@pytest.mark.parametrize(
+    ("decoder_mode", "sp_size"), [(None, 2), ("window", 2), ("window", 4), ("window", 8), ("window", 16)]
+)
+def test_public_deploy_resolution_preserves_ar_configuration(tmp_path, decoder_mode, sp_size):
     for relative in REQUIRED_FILES:
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -527,18 +788,26 @@ def test_public_deploy_resolution_preserves_ar_configuration(tmp_path):
         str(tmp_path),
         trust_remote_code=None,
         deploy_config_path=str(deployment),
-        cli_overrides={},
-        stage_overrides=None,
+        cli_overrides={
+            "ulysses_degree": sp_size,
+            **({} if decoder_mode is None else {"custom_pipeline_args": {"decoder_parallel_mode": decoder_mode}}),
+        },
+        stage_overrides={"0": {"devices": ",".join(str(rank) for rank in range(sp_size))}},
         strategy_config_path=None,
     )
     [stage] = resolution.stage_configs
     assert stage.diffusion_config.engine_backend == "vllm_omni.experimental.ar_diffusion.engine.ARDiffusionEngine"
     assert stage.diffusion_config.step_execution and stage.diffusion_config.streaming_output
-    assert stage.parallel_config.ulysses_degree == 2
+    assert stage.parallel_config.ulysses_degree == sp_size
+    assert stage.parallel_config.sequence_parallel_size == sp_size
+    assert stage.runtime_config.devices == ",".join(str(rank) for rank in range(sp_size))
     assert stage.diffusion_config.custom_pipeline_args["ar_max_latent_frames"] == 120
+    if decoder_mode is not None:
+        assert stage.diffusion_config.custom_pipeline_args["decoder_parallel_mode"] == decoder_mode
 
 
-def test_offline_deploy_selects_isolated_executor(tmp_path):
+@pytest.mark.parametrize("sp_size", [1, 2, 4, 8, 16])
+def test_offline_deploy_selects_isolated_executor(tmp_path, sp_size):
     for relative in REQUIRED_FILES:
         path = tmp_path / relative
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -550,14 +819,22 @@ def test_offline_deploy_selects_isolated_executor(tmp_path):
         str(tmp_path),
         trust_remote_code=None,
         deploy_config_path=str(deployment),
-        cli_overrides={},
-        stage_overrides=None,
+        cli_overrides=(
+            {}
+            if sp_size == 1
+            else {"ulysses_degree": sp_size, "custom_pipeline_args": {"decoder_parallel_mode": "window"}}
+        ),
+        stage_overrides=(None if sp_size == 1 else {"0": {"devices": ",".join(str(rank) for rank in range(sp_size))}}),
         strategy_config_path=None,
     )
     [stage] = resolution.stage_configs
     assert stage.diffusion_config.distributed_executor_backend == "mp"
     assert stage.model_config.enforce_eager
     assert not stage.diffusion_config.step_execution
+    assert stage.parallel_config.ulysses_degree == sp_size
+    if sp_size > 1:
+        assert stage.runtime_config.devices == ",".join(str(rank) for rank in range(sp_size))
+        assert stage.diffusion_config.custom_pipeline_args["decoder_parallel_mode"] == "window"
 
 
 @pytest.mark.parametrize("local_failure", [False, True])

@@ -87,8 +87,10 @@ The converted checkpoint was qualified on one and two H200s at vLLM-Omni commit
 `81620d2d69dc661d694fdc66ae737be0c7d8993d`. See [Verification](#verification)
 for the tested workloads.
 
-Weights, text encoding, and PixelUMM decoding remain replicated with sequence
-parallelism. The degree must divide the DiT's 16 attention heads and the spatial
+Weights and text encoding remain replicated with sequence parallelism. PixelUMM
+also decodes on every rank by default; the experimental window mode divides
+decoder windows among the Ulysses ranks while retaining a full decoder on each rank.
+The degree must divide the DiT's 16 attention heads and the spatial
 token count per latent frame. Real-model validation covers degrees one and two.
 Memory and latency depend on the workload; see [Verification](#verification)
 for the measured configurations and revisions.
@@ -120,6 +122,16 @@ This fork adds opt-in rolling PixelUMM decoding to reference revision
 `911cea6458a89c2663513ff7099561ec190dd491`. The default reference decoder is
 unchanged. AR sessions use stable-prefix rolling decoding without retained
 output history, replace-tail preview, or rollback.
+The pinned revision above supports the default decoder mode. To enable the
+optional window mode, check out the synchronized decoder revision instead:
+
+```bash
+git -C Hy-Nomas fetch origin codex/hy-nomas-b6-window
+git -C Hy-Nomas checkout --detach 9e3a8c5db866c97c4b58cc0f5cb528b1c0d42967
+```
+
+This revision exposes `PixelUMMDCAELatentDecoder.window_error_sync_version == 1`
+and provides the distributed error protocol required by window mode.
 Install FlashAttention 2 for the environment's PyTorch/CUDA versions using the
 [reference installation instructions](https://github.com/Tencent-Hunyuan/Hy-Nomas/tree/911cea6458a89c2663513ff7099561ec190dd491).
 Verify imports before loading weights:
@@ -243,6 +255,24 @@ PixelUMM emits stable frames and retains an overlapping tail between chunks.
 Short chunks may emit no frames. Completion flushes the tail; cancellation or
 disconnect releases the session and discards the withheld tail.
 
+To enable experimental PixelUMM window decoding on a multi-rank Ulysses deployment, add
+`--custom-pipeline-args '{"decoder_parallel_mode":"window"}'` to the server
+command. The decoder uses the existing Ulysses group and sends frames from
+rank 0. Its weights remain replicated. The default is `"none"`; requesting
+`"window"` with a single rank or an older reference decoder fails during
+initialization. SP degree must also divide the DiT's 16 attention heads and the
+spatial token count. The window path requires separate real-model, service,
+and performance qualification for each supported degree.
+
+For example, an SP4 streaming deployment explicitly selects four devices:
+
+```bash
+vllm serve ./Hy-Nomas-Diffusers --omni --port 8098 \
+  --deploy-config vllm_omni/deploy/hy_nomas_ar.yaml \
+  --ulysses-degree 4 --stage-overrides '{"0":{"devices":"0,1,2,3"}}' \
+  --custom-pipeline-args '{"decoder_parallel_mode":"window"}'
+```
+
 Change `ar_height`, `ar_width`, `ar_chunk_latent_frames`, `ar_max_latent_frames`,
 `ar_max_segments`, and `ar_session_capacity` through `custom_pipeline_args`.
 Requests must fit the configured limits; increasing capacity requires more memory.
@@ -330,7 +360,7 @@ MP4 incrementally instead of retaining all decoded frames in host memory.
 | --- | --- |
 | [Sequence parallelism](../../docs/user_guide/diffusion/parallelism/sequence_parallel.md) | Strict Ulysses with the existing worker group. Ring, AllGather-KV, and UAA are unsupported. |
 | [CPU offload](../../docs/user_guide/diffusion/cpu_offload.md) | Module offload, including with SP; layerwise and distributed layerwise offload are unsupported. |
-| [Other parallelism](../../docs/user_guide/diffusion/parallelism/overview.md) | TP, PP, DP, CFG, HSDP, text encoder sharding, and VAE parallelism are unsupported. |
+| [Other parallelism](../../docs/user_guide/diffusion/parallelism/overview.md) | Experimental PixelUMM window decoding uses the Ulysses group; TP, PP, DP, CFG, HSDP, text encoder sharding, and VAE patch parallelism are unsupported. |
 | [Other acceleration](../../docs/user_guide/diffusion_features.md) | Quantization, LoRA, and Cache-DiT are unsupported. Use eager execution; full-transformer compilation is rejected and generic regional compilation leaves the cached reference forward unchanged. FlexAttention retains its own kernel compilation. |
 
 ## Verification
@@ -347,7 +377,7 @@ accuracy plus normal realtime output. Relative to
 | A2 | Pinned companion reference rolling decoder at `16a4c228` | Reference-side source is not duplicated in this Omni diff |
 | A3 | Session-bound rolling decode, positions, empty stable metadata, normal final flush | Full cancellation/transport qualification |
 | A4 | Full/recent transactional retention; offline AR and normal realtime/typed output; 18/36 precision and 120+ second delivery | Remaining A4 service matrix, 72 precision, complete high-water accounting and broad W6/full-vs-recent quality |
-| B1–B9 | Basic SP/module offload remains supported; no new B-series optimization claimed | Media/kernel/attention/staging optimization, chunk residency/prefetch, decode parallelism, encoder sharding, regional compile/graphs and sparsity |
+| B1–B9 | Basic SP/module offload and experimental PixelUMM window decoding | Window decoding requires per-degree real-model/service qualification; media/kernel/attention/staging optimization, chunk residency/prefetch, encoder sharding, regional compile/graphs and sparsity |
 | C1–C8 | Full/recent through AR state interfaces | CPU archival, other history sampling, KV/weight quantization, undo and pause/resume |
 | D1–D3 | Camera trajectory conditioning | Nomas-PE, official LoRA and browser camera UI |
 

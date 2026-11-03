@@ -123,6 +123,31 @@ def test_old_reference_decoder_fails_before_component_loading(checkpoint, monkey
     download.assert_not_called()
 
 
+def test_window_decoder_rejects_unsynchronized_reference(checkpoint, monkeypatch, mocker):
+    class RollingSession:
+        def __init__(self, model, *, rolling=False):
+            pass
+
+    streaming = ModuleType("hymm.models.vae.pixelumm_decoder.streaming")
+    monkeypatch.setattr(streaming, "WindowStreamingDecodeSession", RollingSession, raising=False)
+    autoencoder = ModuleType("hymm.models.vae.pixelumm_decoder.autoencoder")
+    monkeypatch.setattr(autoencoder, "PixelUMMDCAELatentDecoder", type("LegacyDecoder", (), {}), raising=False)
+    monkeypatch.setitem(sys.modules, streaming.__name__, streaming)
+    monkeypatch.setitem(sys.modules, autoencoder.__name__, autoencoder)
+    monkeypatch.setattr(pipeline_hy_nomas, "get_local_device", lambda: torch.device("cuda"))
+    download = mocker.patch.object(pipeline_hy_nomas, "download_weights_from_hf_specific")
+    config = OmniDiffusionConfig(
+        model=str(checkpoint),
+        dtype=torch.bfloat16,
+        distributed_executor_backend="mp",
+        parallel_config=DiffusionParallelConfig(ulysses_degree=2),
+        custom_pipeline_args={"decoder_parallel_mode": "window"},
+    )
+    with pytest.raises(RuntimeError, match="synchronized PixelUMM reference revision"):
+        HyNomasPipeline(od_config=config)
+    download.assert_not_called()
+
+
 def test_discovery_from_modular_index(checkpoint, monkeypatch):
     assert resolve_model_class_name(str(checkpoint)) == "HyNomasModularPipeline"
     assert is_diffusion_model(str(checkpoint))
@@ -177,7 +202,13 @@ def test_public_defaults(architecture):
 
 
 @pytest.mark.parametrize("text_encoder_override", [None, "local-text-encoder"])
-def test_pipeline_loads_diffusers_components(checkpoint, monkeypatch, text_encoder_override):
+@pytest.mark.parametrize(
+    ("decoder_parallel_mode", "sp_size"),
+    [("none", 1), ("window", 2), ("window", 4), ("window", 8), ("window", 16)],
+)
+def test_pipeline_loads_diffusers_components(
+    checkpoint, monkeypatch, text_encoder_override, decoder_parallel_mode, sp_size
+):
     class RollingSession:
         def __init__(self, model, *, to_cpu=True, retain_history=True, rolling=False):
             pass
@@ -195,6 +226,16 @@ def test_pipeline_loads_diffusers_components(checkpoint, monkeypatch, text_encod
     text_encoder = nn.Linear(2, 2)
     vae = nn.Linear(2, 2)
     vae.spatial_compression_ratio = 32
+    vae.configure_distributed_decode = Mock()
+    group = object()
+    if decoder_parallel_mode == "window":
+        autoencoder = ModuleType("hymm.models.vae.pixelumm_decoder.autoencoder")
+        monkeypatch.setattr(
+            autoencoder, "PixelUMMDCAELatentDecoder", SimpleNamespace(window_error_sync_version=1), raising=False
+        )
+        monkeypatch.setitem(sys.modules, autoencoder.__name__, autoencoder)
+        monkeypatch.setattr(pipeline_hy_nomas, "get_sp_group", lambda: SimpleNamespace(ulysses_group=group))
+        monkeypatch.setattr(pipeline_hy_nomas.dist, "get_global_rank", lambda process_group, rank: 0)
     loader = ModuleType("hymm.models.text_encoder")
     load_text = Mock(return_value=text_encoder)
     monkeypatch.setattr(loader, "TextEncoder", load_text, raising=False)
@@ -233,10 +274,18 @@ def test_pipeline_loads_diffusers_components(checkpoint, monkeypatch, text_encod
         revision="test-revision",
         dtype=torch.bfloat16,
         distributed_executor_backend="mp",
-        custom_pipeline_args={} if text_encoder_override is None else {"text_encoder": text_encoder_override},
+        parallel_config=DiffusionParallelConfig(ulysses_degree=sp_size),
+        custom_pipeline_args={
+            "decoder_parallel_mode": decoder_parallel_mode,
+            **({} if text_encoder_override is None else {"text_encoder": text_encoder_override}),
+        },
     )
     pipeline = HyNomasPipeline(od_config=config)
     assert pipeline.transformer is transformer and pipeline.text_encoder is text_encoder and pipeline.vae is vae
+    if decoder_parallel_mode == "window":
+        vae.configure_distributed_decode.assert_called_once_with("window", process_group=group, output_rank=0)
+    else:
+        vae.configure_distributed_decode.assert_not_called()
     assert [(source.subfolder, source.prefix) for source in pipeline.weights_sources] == [
         ("transformer", "transformer."),
         ("decoder", "vae."),
@@ -411,6 +460,21 @@ def test_forward_preserves_display_range_and_sampling_arguments(pipeline):
     assert pipeline._offline_session is None
 
 
+@pytest.mark.parametrize("rank", [0, 1, 3, 7, 15])
+def test_offline_window_decode_only_output_rank_returns_video(pipeline, monkeypatch, rank):
+    pipeline.decoder_parallel_mode = "window"
+    monkeypatch.setattr(pipeline_hy_nomas, "get_sp_group", lambda: SimpleNamespace(ulysses_rank=rank))
+    if rank:
+        pipeline.vae.decode = lambda latents: SimpleNamespace(sample=latents.new_empty((0,)))
+    result = pipeline(make_batch())
+    if rank == 0:
+        result.media.validate()
+        assert result.media.video.tensor.shape == (1, 3, 5, 32, 32)
+    else:
+        assert result.output is None and result.media is None
+    assert pipeline._offline_session is None
+
+
 def test_failure_releases_cache_and_allows_next_request(pipeline):
     pipeline.fail_clean = True
     with pytest.raises(RuntimeError, match="injected clean-forward failure"):
@@ -533,6 +597,15 @@ def test_module_offload_rejects_unsupported_components(components, mocker):
         ({"quantization_config": "int8"}, "unquantized"),
         ({"lora_path": "adapter"}, "LoRA"),
         ({"custom_pipeline_args": {"arbitrary": True}}, "custom_pipeline_args"),
+        ({"custom_pipeline_args": {"decoder_parallel_mode": "unknown"}}, "decoder_parallel_mode"),
+        ({"custom_pipeline_args": {"decoder_parallel_mode": "window"}}, "requires more than one Ulysses rank"),
+        (
+            {
+                "parallel_config": DiffusionParallelConfig(ulysses_degree=3),
+                "custom_pipeline_args": {"decoder_parallel_mode": "window"},
+            },
+            "16 attention heads",
+        ),
         ({"enable_layerwise_offload": True}, "layer offload"),
         ({"flow_shift": 3.0}, "flow_shift=5"),
         ({"enforce_eager": False, "diffusion_compile_granularity": "full"}, "full transformer compilation"),
@@ -567,6 +640,18 @@ def test_supported_ulysses_config(sp_size):
             distributed_executor_backend="mp",
             parallel_config=DiffusionParallelConfig(ulysses_degree=sp_size),
             dtype=torch.bfloat16,
+        )
+    )
+
+
+@pytest.mark.parametrize("sp_size", [2, 4, 8, 16])
+def test_window_decoder_accepts_supported_sp(sp_size):
+    validate_config(
+        OmniDiffusionConfig(
+            distributed_executor_backend="mp",
+            parallel_config=DiffusionParallelConfig(ulysses_degree=sp_size),
+            dtype=torch.bfloat16,
+            custom_pipeline_args={"decoder_parallel_mode": "window"},
         )
     )
 

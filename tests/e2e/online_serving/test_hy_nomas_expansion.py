@@ -18,13 +18,31 @@ pytestmark = [pytest.mark.local_model, pytest.mark.diffusion, *hardware_marks(re
 @pytest.mark.parametrize(
     "omni_server",
     [
-        OmniServerParams(
-            model=os.environ.get("HY_NOMAS_MODEL", "tencent/Hy-Nomas-Diffusers"),
-            server_args=["--deploy-config", "vllm_omni/deploy/hy_nomas_ar_recent.yaml"],
-            stage_init_timeout=1800,
-            init_timeout=2100,
-            startup_timeout=2100,
-        )
+        pytest.param(
+            OmniServerParams(
+                model=os.environ.get("HY_NOMAS_MODEL", "tencent/Hy-Nomas-Diffusers"),
+                server_args=["--deploy-config", "vllm_omni/deploy/hy_nomas_ar_recent.yaml"],
+                stage_init_timeout=1800,
+                init_timeout=2100,
+                startup_timeout=2100,
+            ),
+            id="replicated",
+        ),
+        pytest.param(
+            OmniServerParams(
+                model=os.environ.get("HY_NOMAS_MODEL", "tencent/Hy-Nomas-Diffusers"),
+                server_args=[
+                    "--deploy-config",
+                    "vllm_omni/deploy/hy_nomas_ar_recent.yaml",
+                    "--custom-pipeline-args",
+                    '{"decoder_parallel_mode":"window"}',
+                ],
+                stage_init_timeout=1800,
+                init_timeout=2100,
+                startup_timeout=2100,
+            ),
+            id="window",
+        ),
     ],
     indirect=True,
 )
