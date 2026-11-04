@@ -31,11 +31,11 @@ stages:
           method: qvg
           bits: 4
           num_stages: 1
-          group_size: 64
+          group_size: 16
           num_centroids: 256
-          kmeans_max_iters: 100
+          kmeans_max_iters: 8
           kmeans_min_iters: 4
           kmeans_check_interval: 4
-          kmeans_tolerance: 0.001
+          kmeans_tolerance: 0
           keep_recent_chunks: 1
           seed: 0

@@ -26,6 +26,7 @@ fail initialization; other deployments do not require this package.
 Use the QVG deployment profile with the existing realtime video API:
 
 ```bash
+VLLM_OMNI_AR_DIFFUSION_KV_GATHER=1 \
 vllm serve robbyant/lingbot-world-v2-14b-causal-fast-diffusers --omni \
   --deploy-config vllm_omni/deploy/lingbot_world_v2_qvg.yaml
 ```
@@ -38,15 +39,21 @@ ar_diffusion_kv_config:
     method: qvg
     bits: 4
     num_stages: 1
-    group_size: 64
+    group_size: 16
     num_centroids: 256
-    kmeans_max_iters: 100
+    kmeans_max_iters: 8
     kmeans_min_iters: 4
     kmeans_check_interval: 4
-    kmeans_tolerance: 0.001
+    kmeans_tolerance: 0
     keep_recent_chunks: 1
     seed: 0
 ```
+
+The deployment profile uses a fixed eight-iteration budget and 16-element
+residual scale groups. This avoids convergence synchronizations. Fewer
+iterations trade reconstruction accuracy for encoding time; qualify the
+output on the target workload. The table lists configuration defaults when
+the corresponding fields are omitted.
 
 | Field | Default | Meaning |
 | --- | --- | --- |

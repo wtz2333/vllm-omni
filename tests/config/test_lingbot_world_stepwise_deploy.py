@@ -61,6 +61,6 @@ def test_qvg_profile_keeps_weight_quantization_independent() -> None:
     assert stage.max_num_seqs == 1 and stage.step_execution is True
     assert stage.engine_extras["engine_backend"].endswith("ar_diffusion.engine.ARDiffusionEngine")
     config = ARDiffusionKVConfig(**stage.engine_extras["model_config"]["ar_diffusion_kv_config"])
-    assert config.compression == QVGConfig()
+    assert config.compression == QVGConfig(group_size=16, kmeans_max_iters=8, kmeans_tolerance=0)
     assert not config.warmup_cudagraph
     assert "quantization_config" not in stage.engine_extras
