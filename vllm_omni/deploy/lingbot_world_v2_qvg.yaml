@@ -34,5 +34,8 @@ stages:
           group_size: 64
           num_centroids: 256
           kmeans_max_iters: 100
+          kmeans_min_iters: 4
+          kmeans_check_interval: 4
+          kmeans_tolerance: 0.001
           keep_recent_chunks: 1
           seed: 0

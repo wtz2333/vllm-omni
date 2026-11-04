@@ -34,7 +34,7 @@ from vllm_omni.diffusion.layers.rope import RotaryEmbeddingWan
 from vllm_omni.experimental.ar_diffusion.kv_cache.paged_attention import (
     ARDiffusionPagedLayerContext,
     ARDiffusionPagedLayerInputs,
-    ar_diffusion_paged_attention,
+    contiguous_paged_attention,
     paged_write_attn,
 )
 from vllm_omni.experimental.ar_diffusion.kv_cache.qvg import QVGLayerContext
@@ -323,6 +323,7 @@ class LingBotSelfAttention(nn.Module):
         cache: LingBotAttentionCache | ARDiffusionPagedLayerInputs | QVGLayerContext,
         current_start: int,
         rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
+        key_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
         sink_tokens: int,
         update_cache: bool = True,
         _projection_lease: Lease | None = None,
@@ -340,7 +341,8 @@ class LingBotSelfAttention(nn.Module):
         if rotary_emb is not None:
             cos, sin = rotary_emb
             query = self.rotary_embedding(query, cos, sin)
-            key = self.rotary_embedding(key, cos, sin)
+            if not isinstance(cache, QVGLayerContext):
+                key = self.rotary_embedding(key, cos, sin)
 
         if self.ulysses_world_size > 1:
             # One fused sequence->head all-to-all for q/k/v instead of three:
@@ -360,7 +362,22 @@ class LingBotSelfAttention(nn.Module):
             if cache.forward_ctx.commit_current != update_cache:
                 raise RuntimeError("LingBot QVG commit state must match update_cache")
             visible_key, visible_value = cache.read(current_start, key, value)
-            output = self.attn(query, visible_key, visible_value)
+            if rotary_emb is not None:
+                if key_rotary_emb is None:
+                    raise ValueError("LingBot pre-RoPE QVG requires absolute key position embeddings")
+                visible_key = self.rotary_embedding(visible_key, *key_rotary_emb)
+            context = cache.forward_ctx
+            output = contiguous_paged_attention(
+                query,
+                visible_key,
+                visible_value,
+                block_size=context.history.block_size,
+                softmax_scale=self.head_dim**-0.5,
+                block_table=context.block_table,
+                query_start_loc=context.query_start_loc,
+                seq_lens=context.seq_lens,
+                max_seq_len=context.max_seq_len,
+            )
         elif isinstance(cache, ARDiffusionPagedLayerInputs):
             if query.shape[0] != 1:
                 raise RuntimeError("LingBot AR-Diffusion paged attention requires batch_size=1.")
@@ -384,40 +401,12 @@ class LingBotSelfAttention(nn.Module):
                 sink_tokens=sink_tokens,
                 update_cache=update_cache,
             )
-            if (query.is_cuda or query.device.type == "npu") and query.shape[0] == 1:
-                # Package the visible window as a block table and call the
-                # same block-table entry point as the realtime path
-                # (FlashAttention on CUDA, the fused kernel on NPU) so direct
-                # replay is a numerical oracle for paged execution, rather
-                # than a comparison between two different attention kernels.
-                block_size = key.shape[1]
-                key_cache = visible_key[0].unflatten(0, (-1, block_size))
-                value_cache = visible_value[0].unflatten(0, (-1, block_size))
-                block_count = key_cache.shape[0]
-                block_table = torch.arange(
-                    block_count,
-                    dtype=torch.int32,
-                    device=query.device,
-                ).unsqueeze(0)
-                query_start_loc = torch.tensor(
-                    [0, query.shape[1]],
-                    dtype=torch.int32,
-                    device=query.device,
-                )
-                seq_lens = torch.tensor(
-                    [visible_key.shape[1]],
-                    dtype=torch.int32,
-                    device=query.device,
-                )
-                output = ar_diffusion_paged_attention(
+            if query.shape[0] == 1:
+                output = contiguous_paged_attention(
                     query,
-                    key_cache,
-                    value_cache,
-                    block_table=block_table,
-                    query_start_loc=query_start_loc,
-                    seq_lens=seq_lens,
-                    max_query_len=query.shape[1],
-                    max_seq_len=visible_key.shape[1],
+                    visible_key,
+                    visible_value,
+                    block_size=16,
                     softmax_scale=self.head_dim**-0.5,
                 )
             else:
@@ -649,6 +638,7 @@ class LingBotAttentionBlock(nn.Module):
         sink_tokens: int,
         update_cache: bool,
         rotary_emb: tuple[torch.Tensor, torch.Tensor],
+        key_rotary_emb: tuple[torch.Tensor, torch.Tensor] | None = None,
         camera_modulation: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> tuple[torch.Tensor, LingBotAttentionCache]:
         batch_size, token_count, dim = hidden_states.shape
@@ -689,6 +679,7 @@ class LingBotAttentionBlock(nn.Module):
                 cache=self_cache,
                 current_start=current_start,
                 rotary_emb=rotary_emb,
+                key_rotary_emb=key_rotary_emb,
                 sink_tokens=sink_tokens,
                 update_cache=update_cache,
                 **projection_kwargs,
@@ -1301,6 +1292,25 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
             dtype=hidden_states.dtype,
             device=hidden_states.device,
         )
+        key_rotary_emb = None
+        if cache.self_attention and isinstance(cache.self_attention[0], QVGLayerContext):
+            # 历史存储 pre-RoPE Key；沿绝对时空位置重建完整可见窗口的 RoPE。
+            position_parts = []
+            for start, stop in cache.self_attention[0].token_ranges():
+                if start == current_start:
+                    position_parts.append(rotary_emb)
+                else:
+                    position_parts.append(
+                        self._rotary_embedding(
+                            frames=(stop - start) // tokens_per_frame,
+                            height=patched_height,
+                            width=patched_width,
+                            start_frame=start // tokens_per_frame,
+                            dtype=hidden_states.dtype,
+                            device=hidden_states.device,
+                        )
+                    )
+            key_rotary_emb = tuple(torch.cat(parts, dim=0) for parts in zip(*position_parts))
         # Phase 2: independently patchify video and camera grids to identical
         # token layouts, then project timestep and text conditions.
         hidden_states = self.patch_embedding(hidden_states).flatten(2).transpose(1, 2)
@@ -1390,6 +1400,7 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
                 sink_tokens=sink_tokens,
                 update_cache=update_cache,
                 rotary_emb=rotary_emb,
+                key_rotary_emb=key_rotary_emb,
             )
             cache.cross_attention[index] = cross_cache
 

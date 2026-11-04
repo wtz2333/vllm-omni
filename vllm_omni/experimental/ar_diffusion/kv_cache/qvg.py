@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 import torch
 
 from vllm_omni.experimental.ar_diffusion.kv_cache.config import QVGConfig
+from vllm_omni.experimental.ar_diffusion.kv_cache.paged import visible_window_blocks
+from vllm_omni.experimental.ar_diffusion.kv_cache.paged_attention import _to_device_async
 from vllm_omni.platforms import current_omni_platform
 
 
@@ -28,16 +30,46 @@ class QVGTensor:
 
 class QVGCodec:
     def __init__(self, config: QVGConfig) -> None:
-        from quant_videogen.kmeans.kmeans_euclid import batch_kmeans_Euclid
+        from quant_videogen.kmeans.kmeans_euclid import _euclid_iter
         from quant_videogen.real.accumulate import nstage_accum
         from quant_videogen.real.quant_pack import quant_pack
         from quant_videogen.real.smooth import minus_centroid
 
         self.config = config
-        self._kmeans = batch_kmeans_Euclid
+        self._iterate = _euclid_iter
+        self._kmeans = self._cluster
         self._subtract = minus_centroid
         self._pack = quant_pack
         self._unpack = nstage_accum
+
+    def _centroids_converged(self, previous: torch.Tensor, current: torch.Tensor, sizes: torch.Tensor) -> bool:
+        weights = sizes.float().unsqueeze(-1)
+        movement = ((current.float() - previous.float()).square() * weights).sum(dim=(1, 2))
+        magnitude = (previous.float().square() * weights).sum(dim=(1, 2)).clamp_min(1e-12)
+        return bool(torch.all(movement <= magnitude * self.config.kmeans_tolerance**2))
+
+    def _cluster(
+        self, tensor: torch.Tensor, n_clusters: int, max_iters: int, init_centroids: torch.Tensor
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor, int]:
+        if max_iters <= 0 or init_centroids.shape[1] != n_clusters:
+            raise ValueError("QVG clustering requires positive iterations and matching centroid count")
+        config = self.config
+        centroids = init_centroids
+        squared_norm = tensor.square().sum(dim=-1)
+        for index in range(max_iters):
+            updated, ids, sizes = self._iterate(tensor, squared_norm, centroids)
+            iteration = index + 1
+            check = (
+                config.kmeans_tolerance > 0
+                and iteration >= config.kmeans_min_iters
+                and iteration < max_iters
+                and iteration % config.kmeans_check_interval == 0
+            )
+            converged = check and self._centroids_converged(centroids, updated, sizes)
+            centroids = updated
+            if converged:
+                break
+        return ids, centroids, sizes, iteration
 
     def encode(self, tensor: torch.Tensor) -> QVGTensor:
         tokens, heads, head_size = tensor.shape
@@ -105,6 +137,10 @@ class QVGForwardContext:
     history: QVGHistory
     seq_len: int
     commit_current: bool
+    block_table: torch.Tensor
+    query_start_loc: torch.Tensor
+    seq_lens: torch.Tensor
+    max_seq_len: int
     layers: dict[int, tuple[torch.Tensor, torch.Tensor]] = field(default_factory=dict)
     visited: set[int] = field(default_factory=set)
 
@@ -117,6 +153,15 @@ class QVGLayerContext:
     def read(self, current_start: int, key: torch.Tensor, value: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor]:
         return self.forward_ctx.history.materialize(self, current_start, key, value)
 
+    def token_ranges(self) -> tuple[tuple[int, int], ...]:
+        history = self.forward_ctx.history
+        if history._active is not self.forward_ctx:
+            raise RuntimeError("QVG position metadata belongs to a retired forward")
+        return (
+            *history._ranges(history._end, self.forward_ctx.seq_len),
+            (history._end, history._end + self.forward_ctx.seq_len),
+        )
+
 
 class QVGHistory:
     def __init__(
@@ -128,6 +173,7 @@ class QVGHistory:
         window_tokens: int,
         sink_tokens: int,
         workspace: tuple[torch.Tensor, torch.Tensor],
+        block_size: int = 16,
         agree: Callable[[bool], bool] = bool,
     ) -> None:
         self.codec = codec
@@ -136,6 +182,13 @@ class QVGHistory:
         self.window_tokens = window_tokens
         self.sink_tokens = sink_tokens
         self.workspace = workspace
+        self.block_size = block_size
+        self._attention_blocks = (
+            visible_window_blocks(
+                chunk_size=tokens_per_frame, block_size=block_size, sink_tokens=sink_tokens, window_tokens=window_tokens
+            )
+            + 1
+        )
         self.agree = agree
         self._chunks: tuple[_Chunk, ...] = ()
         self._end = 0
@@ -165,7 +218,23 @@ class QVGHistory:
             raise ValueError("QVG current tokens must contain a positive whole number of latent frames")
         if seq_len > self.window_tokens:
             raise ValueError("QVG recent window must hold the entire current chunk")
-        self._active = QVGForwardContext(self, seq_len, commit_current)
+        visible_tokens = sum(stop - start for start, stop in self._ranges(self._end, seq_len)) + seq_len
+        pages = -(-visible_tokens // self.block_size)
+        device = self.workspace[0].device
+        block_table = _to_device_async(
+            torch.tensor([[*range(pages), *([0] * (self._attention_blocks - pages))]], dtype=torch.int32), device
+        )
+        query_start_loc = _to_device_async(torch.tensor([0, seq_len], dtype=torch.int32), device)
+        seq_lens = _to_device_async(torch.tensor([visible_tokens], dtype=torch.int32), device)
+        self._active = QVGForwardContext(
+            self,
+            seq_len,
+            commit_current,
+            block_table,
+            query_start_loc,
+            seq_lens,
+            self._attention_blocks * self.block_size,
+        )
         return [QVGLayerContext(index, self._active) for index in range(self.num_layers)]
 
     def materialize(

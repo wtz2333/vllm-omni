@@ -26,6 +26,7 @@ from vllm_omni.experimental.ar_diffusion.kv_cache import (
 from vllm_omni.experimental.ar_diffusion.kv_cache import paged_attention as paged_attention_module
 from vllm_omni.experimental.ar_diffusion.kv_cache.config import KV_GATHER_ENV
 from vllm_omni.experimental.ar_diffusion.kv_cache.paged import ChunkWindowManager
+from vllm_omni.experimental.ar_diffusion.kv_cache.paged_attention import contiguous_paged_attention
 from vllm_omni.experimental.ar_diffusion.kv_cache.state import ARDiffusionKVState
 
 pytestmark = [pytest.mark.core_model, pytest.mark.diffusion]
@@ -782,13 +783,10 @@ def _write_prepared_chunk(
 def _window_positions(end: int, *, sink: int, window: int, written, history: int, resident: set[int]) -> list[int]:
     """Token positions attention must read at ``end``.
 
-    Every token of the current chunk, plus every written history token in a
-    block that is still resident and holds a sink token or one of the window's
-    most recent tokens.
+    当前 chunk 与实际仍驻留的 sink、近期 token；边界页中的额外旧行不属于窗口。
     """
     start = end - window
-    blocks = {p // BLOCK for p in range(min(sink, end))} | {p // BLOCK for p in range(max(start, 0), end)}
-    return [p for p in sorted(written) if p >= history or (p // BLOCK in blocks and p // BLOCK in resident)]
+    return [p for p in sorted(written) if p >= history or ((p < sink or p >= start) and p // BLOCK in resident)]
 
 
 def _model_block_indices(kv, adapter) -> dict[int, int]:
@@ -883,6 +881,8 @@ def test_attention_after_eviction_reads_every_kept_token_and_nothing_unwritten(
                 max_seq_len=max_seq_len,
                 softmax_scale=HEAD_DIM**-0.5,
                 causal=False,
+                visible_slots=ctx.visible_slots,
+                packed_block_table=ctx.packed_block_table,
             )
             ref = _dense_attention(
                 query,
@@ -1037,9 +1037,15 @@ def test_the_shipped_geometry_reads_exactly_the_window_on_every_tick():
 
         position_of_block = {b: i * block for b, i in _model_block_indices(kv, st.adapter(POS)).items()}
         read: list[tuple[int, int]] = []
-        for b in table[0].tolist()[: -(-kv_len // block)]:
-            assert b in position_of_block, f"tick {tick}: read block {b}, which holds no token of this session"
-            read.extend((b * block + o, position_of_block[b] + o) for o in range(block))
+        if ctx.visible_slots is not None:
+            for slot in ctx.visible_slots.tolist():
+                b, offset = divmod(slot, block)
+                assert b in position_of_block
+                read.append((slot, position_of_block[b] + offset))
+        else:
+            for b in table[0].tolist()[: -(-kv_len // block)]:
+                assert b in position_of_block, f"tick {tick}: read block {b}, which holds no token of this session"
+                read.extend((b * block + o, position_of_block[b] + o) for o in range(block))
         read = read[:kv_len]
         wrong = [(slot, want) for slot, want in read if holds.get(slot) != want]
         assert not wrong, f"tick {tick}: {len(wrong)} slots read hold a token other than the one their position implies"
@@ -1048,6 +1054,7 @@ def test_the_shipped_geometry_reads_exactly_the_window_on_every_tick():
         kept = set(range(min(sink, end))) | set(range(max(start, 0), end))
         missed = kept - {want for _, want in read}
         assert not missed, f"tick {tick}: {len(missed)} tokens the window keeps were not read"
+        assert {want for _, want in read} == kept
 
         filled = filled or end > sink + window
         st.commit_paged_context(POS)
@@ -1304,3 +1311,98 @@ def test_contiguous_kv_gather_path_matches_paged_path_gpu(monkeypatch, history_c
     assert torch.isfinite(gathered).all()
     # Same kernel family on the same K/V: only accumulation order differs.
     torch.testing.assert_close(gathered, paged, rtol=2e-3, atol=2e-3)
+
+
+@pytest.mark.cpu
+@pytest.mark.parametrize("tokens_per_frame", [16, 1560])
+@pytest.mark.parametrize("sink_frames", [0, 9])
+def test_frame_window_attention_excludes_partial_page_boundary_tokens(tokens_per_frame, sink_frames):
+    config = ARDiffusionKVConfig(enable=True, chunk_size=tokens_per_frame, window_chunks=9, sink_chunks=sink_frames)
+    cache = ARDiffusionKVCache(
+        config,
+        num_layers=1,
+        num_kv_heads=1,
+        head_size=64,
+        dtype=torch.float64,
+        block_size=16,
+        max_model_len=100000,
+        available_bytes=1 << 27,
+        kv_branches=(ARDiffusionKVBranchSpec(POS, 0),),
+        session_capacity=1,
+        frames_per_block=3,
+        device=torch.device("cpu"),
+    )
+    state = ARDiffusionKVState(cache, "frame-window", {POS: cache.begin_request("frame-window")}, num_layers=1)
+    tokens = 3 * tokens_per_frame
+    try:
+        for chunk in range(9):
+            layer = state.get_kv_caches(POS, seq_len=tokens, commit_current=True)[0]
+            layer.forward_ctx.prepare(torch.device("cpu"), action_len=0, query_len=1)
+            inputs = layer.to_layer_inputs()
+            end = (chunk + 1) * tokens
+            values = torch.arange(chunk * tokens, end, dtype=torch.float64).view(-1, 1, 1).expand(-1, 1, 64)
+            output = paged_write_attn(
+                inputs, torch.zeros(1, 1, 64, dtype=torch.float64), values, values / 100000, None, None, 64**-0.5
+            )
+            prefix = min(end, sink_frames * tokens_per_frame)
+            positions = torch.cat((torch.arange(prefix), torch.arange(max(prefix, end - 9 * tokens_per_frame), end)))
+            expected = torch.full_like(output, positions.double().mean() / 100000)
+            torch.testing.assert_close(output, expected, rtol=0, atol=1e-7)
+            assert layer.forward_ctx.kv_len == len(positions)
+            state.commit_paged_context(POS)
+    finally:
+        state.close()
+
+
+@hardware_test(res={"cuda": "H100"}, num_cards=1)
+def test_ragged_frame_window_matches_contiguous_read_on_real_kernel():
+    _require_gpu_flash_attn()
+    torch.manual_seed(0)
+    device = torch.device("cuda")
+    config = ARDiffusionKVConfig(enable=True, chunk_size=1560, window_chunks=9, sink_chunks=9)
+    cache = ARDiffusionKVCache(
+        config,
+        num_layers=1,
+        num_kv_heads=40,
+        head_size=128,
+        dtype=torch.bfloat16,
+        block_size=16,
+        max_model_len=100000,
+        available_bytes=2 << 30,
+        kv_branches=(ARDiffusionKVBranchSpec(POS, 0),),
+        session_capacity=1,
+        frames_per_block=3,
+        device=device,
+    )
+    state = ARDiffusionKVState(
+        cache, "real-frame-window", {POS: cache.begin_request("real-frame-window")}, num_layers=1
+    )
+    cache._k_pools[0].fill_(float("nan"))
+    cache._v_pools[0].fill_(float("nan"))
+    keys, values = [], []
+    try:
+        for chunk in range(9):
+            layer = state.get_kv_caches(POS, seq_len=4680, commit_current=True)[0]
+            layer.forward_ctx.prepare(device, action_len=0, query_len=4680)
+            inputs = layer.to_layer_inputs()
+            key = torch.randn(4680, 40, 128, dtype=torch.bfloat16, device=device)
+            value, query = torch.randn_like(key), torch.randn_like(key)
+            actual = paged_write_attn(inputs, query, key, value, None, None, 128**-0.5)
+            keys.append(key)
+            values.append(value)
+            end = (chunk + 1) * 4680
+            positions = torch.arange(end, device=device)
+            selected = (positions < 14040) | (positions >= end - 14040)
+            expected = contiguous_paged_attention(
+                query,
+                torch.cat(keys)[selected],
+                torch.cat(values)[selected],
+                block_size=16,
+                softmax_scale=128**-0.5,
+                max_seq_len=inputs.max_seq_len,
+            )
+            torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+            assert int(inputs.seq_lens[0]) == min(end, 28080)
+            state.commit_paged_context(POS)
+    finally:
+        state.close()

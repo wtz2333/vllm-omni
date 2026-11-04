@@ -4,6 +4,7 @@
 
 from __future__ import annotations
 
+import math
 import os
 from dataclasses import dataclass
 from typing import Any
@@ -19,6 +20,9 @@ class QVGConfig:
     group_size: int = 64
     num_centroids: int = 256
     kmeans_max_iters: int = 100
+    kmeans_min_iters: int = 4
+    kmeans_check_interval: int = 4
+    kmeans_tolerance: float = 0.001
     keep_recent_chunks: int = 1
     seed: int = 0
 
@@ -26,7 +30,7 @@ class QVGConfig:
         if self.method != "qvg":
             raise ValueError(f"Unsupported AR-Diffusion history compression method: {self.method!r}")
         for name in self.__dataclass_fields__:
-            if name != "method":
+            if name not in ("method", "kmeans_tolerance"):
                 value = getattr(self, name)
                 if isinstance(value, bool) or not isinstance(value, int):
                     raise ValueError(f"QVG {name} must be an integer, got {value!r}")
@@ -40,6 +44,13 @@ class QVGConfig:
             raise ValueError("QVG num_centroids must be between 1 and 256")
         if self.kmeans_max_iters <= 0 or self.keep_recent_chunks < 0 or self.seed < 0:
             raise ValueError("QVG requires positive kmeans_max_iters and non-negative keep_recent_chunks and seed")
+        if self.kmeans_min_iters <= 0 or self.kmeans_check_interval <= 0:
+            raise ValueError("QVG kmeans_min_iters and kmeans_check_interval must be positive")
+        tolerance = self.kmeans_tolerance
+        if isinstance(tolerance, bool) or not isinstance(tolerance, (int, float)):
+            raise ValueError("QVG kmeans_tolerance must be a finite non-negative number")
+        if not 0 <= tolerance <= 1 or not math.isfinite(tolerance):
+            raise ValueError("QVG kmeans_tolerance must be finite and between zero and one")
 
 
 def contiguous_kv_gather_enabled() -> bool:

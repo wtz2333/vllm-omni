@@ -119,6 +119,7 @@ class ARDiffusionKVState:
                     window_tokens=self.kv_cache.spec.sliding_window,
                     sink_tokens=self.kv_cache.spec.sink_chunks * self.kv_cache.spec.chunk_size,
                     workspace=workspace,
+                    block_size=self.kv_cache.block_size,
                     agree=self.kv_cache._agree_staging_allocation,
                 )
             return self._compressed[kv_branch].prepare(int(seq_len), bool(commit_current))

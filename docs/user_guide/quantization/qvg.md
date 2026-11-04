@@ -41,6 +41,9 @@ ar_diffusion_kv_config:
     group_size: 64
     num_centroids: 256
     kmeans_max_iters: 100
+    kmeans_min_iters: 4
+    kmeans_check_interval: 4
+    kmeans_tolerance: 0.001
     keep_recent_chunks: 1
     seed: 0
 ```
@@ -52,6 +55,9 @@ ar_diffusion_kv_config:
 | `group_size` | `64` | Residual scale group, `16`, `32`, or `64`; must divide the head size. |
 | `num_centroids` | `256` | Centroids per head and stage, from `1` to `256`; must fit one generated chunk. |
 | `kmeans_max_iters` | `100` | Positive iteration bound. |
+| `kmeans_min_iters` | `4` | Earliest iteration eligible for convergence, subject to the hard maximum. |
+| `kmeans_check_interval` | `4` | Check convergence once per interval rather than synchronizing every iteration. |
+| `kmeans_tolerance` | `0.001` | Per-head, token-weighted relative RMS centroid movement; `0` runs the fixed iteration budget. |
 | `keep_recent_chunks` | `1` | Completed generated chunks retained in floating point. |
 | `seed` | `0` | Independent k-means initialization seed. |
 
@@ -59,6 +65,11 @@ Chunks overlapping the attention sink remain in floating point. Reads select
 the exact sink and recent-window rows, even when those rows cover only part
 of a compressed chunk. Eviction releases whole compressed chunks once no
 visible row references them; retained data is never recompressed.
+
+Clustering uses the pinned QVG Lloyd update kernels. The hard iteration bound
+always applies; convergence is checked only after the minimum iteration count
+and at the configured interval. Each head must satisfy the movement threshold.
+Validate the tolerance on the target workload before changing it.
 
 ## Combine with weight quantization
 
@@ -92,8 +103,11 @@ more sessions. Measure actual allocated/reserved memory together with kernel
 temporaries; the paper's KV compression ratio is not a total-device-memory
 reduction guarantee.
 
-The initial integration preserves LingBot's post-RoPE keys and its existing
-Ulysses head ownership. It rejects graph/compiled execution, noisy-cell
+LingBot stores pre-RoPE keys and restores the absolute spatial and temporal
+positions after reconstruction. Native paged, direct, and QVG reads use the
+same paged attention entry point. Partial pages are trimmed to the exact sink
+and recent-frame window. Ulysses head ownership is preserved.
+It rejects graph/compiled execution, noisy-cell
 pipelines, first-block KV sharing, last-step KV reuse, boundary resets,
 full-history staging reuse, and explicit runtime attention quantization.
 It requires the normal clean-x0 commit. Cross-attention stays in its native

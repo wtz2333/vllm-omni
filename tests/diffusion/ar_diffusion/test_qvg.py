@@ -66,6 +66,14 @@ def qvg_primitives(monkeypatch):
         return out
 
     setattr(modules["quant_videogen.kmeans.kmeans_euclid"], "batch_kmeans_Euclid", kmeans)
+
+    def iteration(x, squared_norm, centroids):
+        ids, updated, _, _ = kmeans(x, centroids.shape[1], 1, centroids)
+        sizes = torch.zeros(centroids.shape[:2], dtype=torch.int32)
+        sizes[:, 0] = x.shape[1]
+        return updated, ids, sizes
+
+    setattr(modules["quant_videogen.kmeans.kmeans_euclid"], "_euclid_iter", iteration)
     setattr(modules["quant_videogen.real.accumulate"], "nstage_accum", unpack)
     setattr(modules["quant_videogen.real.quant_pack"], "quant_pack", pack)
     setattr(modules["quant_videogen.real.smooth"], "minus_centroid", subtract)
@@ -125,6 +133,12 @@ def test_codec_uses_packed_storage_and_preserves_sampling_rng(qvg_primitives, bi
         {"group_size": 8},
         {"num_centroids": 257},
         {"kmeans_max_iters": 0},
+        {"kmeans_min_iters": 0},
+        {"kmeans_check_interval": 0},
+        {"kmeans_tolerance": -0.1},
+        {"kmeans_tolerance": float("nan")},
+        {"kmeans_tolerance": float("inf")},
+        {"kmeans_tolerance": True},
         {"keep_recent_chunks": -1},
         {"seed": -1},
     ],
@@ -136,6 +150,37 @@ def test_invalid_compression_fails_before_allocation(kwargs):
 
 def test_history_compression_has_an_independent_config():
     assert ARDiffusionKVConfig().compression is None
+
+
+def test_kmeans_stops_on_centroid_movement_and_checks_only_at_intervals(qvg_primitives, mocker):
+    codec = QVGCodec(QVGConfig(num_centroids=2, kmeans_min_iters=4, kmeans_check_interval=4))
+    check = mocker.spy(codec, "_centroids_converged")
+    iterate = mocker.spy(codec, "_iterate")
+    tensor = torch.ones(2, 48, 64)
+    ids, centroids, _, iterations = codec._kmeans(tensor, 2, 100, torch.ones(2, 2, 64))
+    assert iterations == 4 and iterate.call_count == 4 and check.call_count == 1
+    assert torch.equal(centroids, torch.ones_like(centroids))
+    assert ids.shape == (2, 48)
+
+
+def test_kmeans_honors_hard_budget_when_not_converged(qvg_primitives, monkeypatch, mocker):
+    codec = QVGCodec(QVGConfig(num_centroids=2, kmeans_tolerance=1e-8, kmeans_check_interval=4))
+
+    def moving(tensor, squared_norm, centroids):
+        return centroids + 1, torch.zeros(tensor.shape[:2], dtype=torch.long), torch.ones(centroids.shape[:2])
+
+    monkeypatch.setattr(codec, "_iterate", moving)
+    check = mocker.spy(codec, "_centroids_converged")
+    _, centers, _, iterations = codec._kmeans(torch.ones(2, 48, 64), 2, 11, torch.ones(2, 2, 64))
+    assert iterations == 11 and check.call_count == 2
+    assert torch.equal(centers, torch.full_like(centers, 12))
+
+
+def test_kmeans_fixed_budget_does_not_read_convergence_scalars(qvg_primitives, mocker):
+    codec = QVGCodec(QVGConfig(num_centroids=2, kmeans_tolerance=0))
+    check = mocker.spy(codec, "_centroids_converged")
+    _, _, _, iterations = codec._kmeans(torch.ones(2, 48, 64), 2, 7, torch.ones(2, 2, 64))
+    assert iterations == 7 and check.call_count == 0
     config = ARDiffusionKVConfig(compression={"bits": 2, "group_size": 32})
     assert config.compression == QVGConfig(bits=2, group_size=32)
     for field in ("reuse_history_staging", "reset_at_boundary"):
@@ -357,6 +402,9 @@ def test_runner_rejects_unsupported_compression_before_allocating(failure):
 def test_lingbot_attention_reads_qvg_history_and_preserves_linear_quantization(codec, monkeypatch):
     module = _load_module()
     monkeypatch.setattr(module, "QVGLayerContext", QVGLayerContext)
+    from vllm_omni.experimental.ar_diffusion.kv_cache.paged_attention import contiguous_paged_attention
+
+    monkeypatch.setattr(module, "contiguous_paged_attention", contiguous_paged_attention)
     quant_config = object()
     attention = module.LingBotSelfAttention(dim=128, num_heads=2, quant_config=quant_config)
     assert attention.qkv.quant_config is quant_config
@@ -389,3 +437,71 @@ def test_lingbot_attention_reads_qvg_history_and_preserves_linear_quantization(c
         )
         torch.testing.assert_close(actual, expected, rtol=0, atol=0)
         history.commit()
+
+
+@torch.inference_mode()
+def test_pre_rope_history_restores_absolute_positions_across_eviction(codec, monkeypatch):
+    from vllm_omni.diffusion.layers.rope import RotaryEmbeddingWan
+    from vllm_omni.experimental.ar_diffusion.kv_cache.paged_attention import contiguous_paged_attention
+
+    module = _load_module()
+    monkeypatch.setattr(module, "QVGLayerContext", QVGLayerContext)
+    monkeypatch.setattr(module, "contiguous_paged_attention", contiguous_paged_attention)
+    rotary = RotaryEmbeddingWan(half_head_dim=True)
+
+    class CPURotary(torch.nn.Module):
+        def forward(self, value, cosine, sine):
+            return rotary.forward_native(value, cosine, sine)
+
+    attention = module.LingBotSelfAttention(dim=128, num_heads=2, quant_config=object())
+    attention.rotary_embedding = CPURotary()
+    attention.qkv.weight.copy_(torch.eye(128).repeat(3, 1))
+    attention.qkv.bias.zero_()
+    attention.o.weight.copy_(torch.eye(128))
+    attention.o.bias.zero_()
+    attention.norm_q = torch.nn.Identity()
+    attention.norm_k = torch.nn.Identity()
+    native = module.allocate_lingbot_cache(
+        batch_size=1,
+        num_layers=1,
+        max_tokens=160,
+        num_local_heads=2,
+        head_dim=64,
+        device=torch.device("cpu"),
+        dtype=torch.float32,
+    ).self_attention[0]
+    history = QVGHistory(
+        codec,
+        num_layers=1,
+        tokens_per_frame=16,
+        window_tokens=144,
+        sink_tokens=16,
+        workspace=(torch.empty(1, 160, 2, 64), torch.empty(1, 160, 2, 64)),
+    )
+
+    def positions(indices):
+        phase = indices.float().unsqueeze(-1) * torch.linspace(0.001, 0.03, 32)
+        return phase.cos(), phase.sin()
+
+    for index in range(9):
+        start = index * 48
+        hidden = torch.full((1, 48, 128), float(index + 1))
+        current_rope = positions(torch.arange(start, start + 48))
+        expected = attention(hidden, cache=native, current_start=start, sink_tokens=16, rotary_emb=current_rope)
+        context = history.prepare(48, True)[0]
+        ranges = context.token_ranges()
+        indices = torch.cat([torch.arange(left, right) for left, right in ranges])
+        actual = attention(
+            hidden,
+            cache=context,
+            current_start=start,
+            sink_tokens=16,
+            rotary_emb=current_rope,
+            key_rotary_emb=positions(indices),
+        )
+        torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+        assert torch.equal(context.forward_ctx.layers[0][0], hidden[0].unflatten(-1, (2, 64)))
+        history.commit()
+        with pytest.raises(RuntimeError, match="retired"):
+            context.token_ranges()
+    history.close()

@@ -274,6 +274,13 @@ def _install_vllm_stubs() -> None:
         pass
 
     setattr(sys.modules["vllm_omni.experimental.ar_diffusion.kv_cache.qvg"], "QVGLayerContext", _QVGLayerContext)
+
+    def contiguous_attention(query, key, value, *, softmax_scale, **kwargs):
+        return F.scaled_dot_product_attention(
+            query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2), scale=softmax_scale
+        ).transpose(1, 2)
+
+    setattr(paged_attention, "contiguous_paged_attention", contiguous_attention)
     setattr(
         paged_attention,
         "ar_diffusion_paged_attention",
@@ -382,6 +389,18 @@ def _record_inputs(module: nn.Module) -> list[tuple]:
     return records
 
 
+def _record_contiguous_inputs(module, monkeypatch) -> list[tuple]:
+    records = []
+    original = module.contiguous_paged_attention
+
+    def record(query, key, value, **kwargs):
+        records.append((query.detach().clone(), key.detach().clone(), value.detach().clone()))
+        return original(query, key, value, **kwargs)
+
+    monkeypatch.setattr(module, "contiguous_paged_attention", record)
+    return records
+
+
 def _record_outputs(module: nn.Module) -> list[torch.Tensor]:
     records: list[torch.Tensor] = []
 
@@ -465,12 +484,12 @@ def test_self_attention_routes_paged_inputs_through_engine_owned_cache() -> None
     assert not any(hasattr(attention, name) for name in ("q", "k", "v"))
 
 
-def test_self_attention_is_chunk_causal_without_masking_inside_current_chunk() -> None:
+def test_self_attention_is_chunk_causal_without_masking_inside_current_chunk(monkeypatch) -> None:
     module = _load_module()
     attention = module.LingBotSelfAttention(dim=2, num_heads=1)
     _set_identity_attention(attention)
     cache = _allocate_single_layer(module, max_tokens=8).self_attention[0]
-    attention_inputs = _record_inputs(attention.attn)
+    attention_inputs = _record_contiguous_inputs(module, monkeypatch)
 
     attention(_tokens(1, 2), cache=cache, current_start=0, sink_tokens=0)
     first_keys = attention_inputs[-1][1].detach().clone()
@@ -482,12 +501,12 @@ def test_self_attention_is_chunk_causal_without_masking_inside_current_chunk() -
     torch.testing.assert_close(second_keys[0, :, 0, 0], torch.tensor([1.0, 2.0, 3.0, 4.0]))
 
 
-def test_self_attention_retains_sink_and_latest_local_history_after_eviction() -> None:
+def test_self_attention_retains_sink_and_latest_local_history_after_eviction(monkeypatch) -> None:
     module = _load_module()
     attention = module.LingBotSelfAttention(dim=2, num_heads=1)
     _set_identity_attention(attention)
     cache = _allocate_single_layer(module, max_tokens=4).self_attention[0]
-    attention_inputs = _record_inputs(attention.attn)
+    attention_inputs = _record_contiguous_inputs(module, monkeypatch)
 
     attention(_tokens(1, 2), cache=cache, current_start=0, sink_tokens=1)
     attention(_tokens(3, 4), cache=cache, current_start=2, sink_tokens=1)

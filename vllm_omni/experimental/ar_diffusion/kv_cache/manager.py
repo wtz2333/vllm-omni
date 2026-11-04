@@ -390,7 +390,8 @@ class ARDiffusionKVCache:
             self.history_staging_tokens = resident_frames * config.chunk_size
             # 保留原有会话准入上限，另计单层读取工作区、部分可见 chunk 和压缩临时量。
             self.history_staging_reserved_bytes = (
-                2 * self.history_staging_tokens * num_kv_heads * head_size * dtype.itemsize
+                3 * self.history_staging_tokens * num_kv_heads * head_size * dtype.itemsize
+                + self.history_staging_tokens * head_size * dtype.itemsize
                 + 4 * num_layers * frames_per_block * config.chunk_size * num_kv_heads * head_size * dtype.itemsize
                 + 32 * frames_per_block * config.chunk_size * num_kv_heads * head_size * 4
             )
