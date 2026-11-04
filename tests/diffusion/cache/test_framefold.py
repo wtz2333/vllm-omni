@@ -15,7 +15,8 @@ def _identity(value):
 
 def _rotate(grid, start):
     frames, spatial, _, dim = grid.shape
-    phase = torch.arange(start, start + frames, dtype=grid.dtype)[:, None] * 0.7
+    positions = torch.arange(start, start + frames) if isinstance(start, int) else torch.tensor(start)
+    phase = positions.to(grid.dtype)[:, None] * 0.7
     phase = phase + torch.arange(spatial, dtype=grid.dtype)[None, :] * 0.1
     cosine, sine = phase.cos()[:, :, None, None], phase.sin()[:, :, None, None]
     pairs = grid.unflatten(-1, (dim // 2, 2))
@@ -160,7 +161,30 @@ def test_noisy_probes_reuse_plan_and_leave_committed_storage_unchanged():
     assert cache.absolute_end == 42 and cache.merge_count == 1
 
 
-def test_keys_are_merged_before_rope_and_encoded_at_compacted_positions():
+def test_queries_and_unmerged_keys_keep_absolute_positions_after_merges():
+    cache = _cache()
+    generator = torch.Generator().manual_seed(81)
+    previous_key = None
+    for frame in range(30):
+        query, key, incoming_value = [torch.randn(6, 2, 4, generator=generator) for _ in range(3)]
+        q, encoded, canonical, value, spans = _prepare(cache, query, key, incoming_value)
+        torch.testing.assert_close(q, _rotate(query.unsqueeze(0), frame)[0], atol=0, rtol=0)
+        torch.testing.assert_close(encoded[-6:], _rotate(key.unsqueeze(0), frame)[0], atol=0, rtol=0)
+        if previous_key is not None:
+            torch.testing.assert_close(
+                encoded[-12:-6], _rotate(previous_key.unsqueeze(0), frame - 1)[0], atol=0, rtol=0
+            )
+        position = 0
+        for index, span in enumerate(spans):
+            expected = _rotate(canonical[index * 6 : (index + 1) * 6].unsqueeze(0), position)[0]
+            torch.testing.assert_close(encoded[index * 6 : (index + 1) * 6], expected, atol=0, rtol=0)
+            position += span
+        cache.commit(q, canonical, value, spans)
+        previous_key = key.clone()
+    assert cache.merge_count == 24
+
+
+def test_keys_are_merged_before_rope_and_encoded_at_absolute_left_positions():
     cache = _cache()
     for frame in range(6):
         key = torch.full((6, 2, 4), frame + 1.0)
@@ -168,11 +192,16 @@ def test_keys_are_merged_before_rope_and_encoded_at_compacted_positions():
         cache.commit(q, next_key, value, spans)
     previous = cache.key.unflatten(0, (6, 6)).clone()
     incoming = torch.ones(6, 2, 4)
-    _, encoded, pre_rope, _, _ = _prepare(cache, incoming, incoming, incoming)
+    _, encoded, pre_rope, _, spans = _prepare(cache, incoming, incoming, incoming)
     index, beta, _ = cache._plan[0]
     expected = beta * previous[index] + (1 - beta) * previous[index + 1]
     torch.testing.assert_close(pre_rope.unflatten(0, (6, 6))[index], expected)
-    torch.testing.assert_close(encoded, _rotate(pre_rope.unflatten(0, (6, 6)), 0).flatten(0, 1))
+    positions = []
+    frame = 0
+    for span in spans:
+        positions.append(frame)
+        frame += span
+    torch.testing.assert_close(encoded, _rotate(pre_rope.unflatten(0, (6, 6)), positions).flatten(0, 1))
     wrong = beta * _rotate(previous[index : index + 1], index) + (1 - beta) * _rotate(
         previous[index + 1 : index + 2], index + 1
     )

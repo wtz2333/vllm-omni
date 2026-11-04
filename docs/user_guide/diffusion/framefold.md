@@ -44,8 +44,10 @@ leaves three slots for historical representatives.
 Complete requests use request-local buffers. AR-Diffusion sessions reserve a
 fixed set of pages from the runtime's KV pool and release them on reset,
 close, cancellation or failure. These pages store pre-RoPE keys and values;
-attention materializes keys at the compacted cache positions. Absolute frame
-positions for camera controls and output continue to advance independently.
+attention materializes each representative at the absolute left boundary of
+the original interval it covers. Current queries and keys keep the checkpoint's
+absolute frame positions. Compact storage does not renumber time; camera
+controls and output advance on the same original timeline.
 
 Denoising probes reuse the merge plan without changing committed K/V or the
 saved historical queries. Clean-x0 forwards publish the updated history and

@@ -406,12 +406,13 @@ class LingBotSelfAttention(nn.Module):
             if query.shape[0] != 1:
                 raise ValueError("FrameFold requires batch_size=1.")
 
-            def rotate(grid: torch.Tensor, start: int) -> torch.Tensor:
+            def rotate(grid: torch.Tensor, start: int | list[int]) -> torch.Tensor:
                 cosine, sine = cache.rope(
                     frames=grid.shape[0],
                     height=cache.height,
                     width=cache.width,
-                    start_frame=start,
+                    start_frame=start if isinstance(start, int) else start[0],
+                    frame_positions=None if isinstance(start, int) else start,
                     dtype=grid.dtype,
                     device=grid.device,
                 )
@@ -849,7 +850,9 @@ def _sinusoidal_embedding(dim: int, timestep: torch.Tensor) -> torch.Tensor:
     return torch.cat((phase.cos(), phase.sin()), dim=1)
 
 
-def _rope_axis(max_seq_len: int, dim: int, *, start: int = 0) -> tuple[torch.Tensor, torch.Tensor]:
+def _rope_axis(
+    max_seq_len: int, dim: int, *, start: int = 0, frame_positions: list[int] | None = None
+) -> tuple[torch.Tensor, torch.Tensor]:
     if dim == 0:
         empty = torch.empty(max_seq_len, 0, dtype=torch.float32)
         return empty, empty.clone()
@@ -859,7 +862,12 @@ def _rope_axis(max_seq_len: int, dim: int, *, start: int = 0) -> tuple[torch.Ten
         10000,
         torch.arange(0, dim, 2, dtype=torch.float64) / dim,
     )
-    phase = torch.outer(torch.arange(start, start + max_seq_len, dtype=torch.float64), frequencies)
+    positions = (
+        torch.arange(start, start + max_seq_len, dtype=torch.float64)
+        if frame_positions is None
+        else torch.tensor(frame_positions, dtype=torch.float64)
+    )
+    phase = torch.outer(positions, frequencies)
     return phase.cos().float(), phase.sin().float()
 
 
@@ -1192,17 +1200,32 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
         start_frame: int,
         dtype: torch.dtype,
         device: torch.device,
+        frame_positions: list[int] | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         if height > self.config.rope_max_seq_len or width > self.config.rope_max_seq_len:
             raise ValueError("Spatial RoPE positions exceed rope_max_seq_len.")
-        if start_frame + frames <= self._rope_temporal_cosine.shape[0]:
+        if frame_positions is not None:
+            if len(frame_positions) != frames or any(
+                isinstance(position, bool) or not isinstance(position, int) or position < 0
+                for position in frame_positions
+            ):
+                raise ValueError("RoPE frame positions must contain one nonnegative integer per frame.")
+            if frame_positions == list(range(start_frame, start_frame + frames)):
+                frame_positions = None
+        if frame_positions is not None and max(frame_positions) < self._rope_temporal_cosine.shape[0]:
+            indices = torch.tensor(frame_positions, dtype=torch.long, device=self._rope_temporal_cosine.device)
+            temporal_cosine = self._rope_temporal_cosine.index_select(0, indices)
+            temporal_sine = self._rope_temporal_sine.index_select(0, indices)
+        elif frame_positions is None and start_frame + frames <= self._rope_temporal_cosine.shape[0]:
             temporal_cosine = self._rope_temporal_cosine[start_frame : start_frame + frames]
             temporal_sine = self._rope_temporal_sine[start_frame : start_frame + frames]
         else:
             # Keep absolute positions and checkpoint frequencies, computing only
             # this block instead of growing a table for the whole session.
             temporal_dim = self._rope_temporal_cosine.shape[1] * 2
-            temporal_cosine, temporal_sine = _rope_axis(frames, temporal_dim, start=start_frame)
+            temporal_cosine, temporal_sine = _rope_axis(
+                frames, temporal_dim, start=start_frame, frame_positions=frame_positions
+            )
             temporal_cosine = temporal_cosine.to(self._rope_temporal_cosine)
             temporal_sine = temporal_sine.to(self._rope_temporal_sine)
 

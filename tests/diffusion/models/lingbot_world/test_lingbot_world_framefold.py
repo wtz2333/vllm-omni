@@ -139,6 +139,18 @@ def test_no_merge_attention_matches_fifo_with_real_rope():
     assert all(layer.merge_count == 0 for layer in folded.self_attention)
 
 
+@pytest.mark.parametrize("positions", [[0, 2, 5], [8, 9, 10], [0, 17, 1500]])
+def test_sparse_absolute_rope_matches_original_frame_encoding(positions):
+    model = _model().eval()
+    kwargs = dict(height=2, width=2, dtype=torch.float32, device=torch.device("cpu"))
+    actual = model._rotary_embedding(
+        frames=len(positions), start_frame=positions[0], frame_positions=positions, **kwargs
+    )
+    individual = [model._rotary_embedding(frames=1, start_frame=position, **kwargs) for position in positions]
+    for index in (0, 1):
+        torch.testing.assert_close(actual[index], torch.cat([item[index] for item in individual]), atol=0, rtol=0)
+
+
 def test_dmd_uses_packed_history_and_commits_only_clean_forward(packed_state, monkeypatch):
     model = _model().eval()
     cache = _allocate(model, kv_buffers=packed_state.reserve_packed_history("main", 24))

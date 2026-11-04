@@ -6,12 +6,13 @@ from __future__ import annotations
 import math
 from collections.abc import Callable
 from dataclasses import dataclass
+from itertools import accumulate
 
 import torch
 import torch.nn.functional as F
 
 Reduce = Callable[[torch.Tensor], torch.Tensor]
-Rotate = Callable[[torch.Tensor, int], torch.Tensor]
+Rotate = Callable[[torch.Tensor, int | list[int]], torch.Tensor]
 RoPE = Callable[..., tuple[torch.Tensor, torch.Tensor]]
 
 
@@ -97,6 +98,11 @@ class FrameFoldLayerCache:
     def tokens_per_frame(self) -> int:
         return self.height * self.width
 
+    @staticmethod
+    def _frame_positions(spans: list[int]) -> list[int]:
+        # 代表保留其原始连续区间的左边界，物理压缩不改变时间坐标。
+        return list(accumulate(spans, initial=0))[:-1]
+
     def _pool(self, value: torch.Tensor) -> torch.Tensor:
         frames, _, heads, dim = value.shape
         pooled_height = math.ceil(self.height / self.config.pooling_factor)
@@ -116,7 +122,8 @@ class FrameFoldLayerCache:
         indices = list(range(self.config.sink_frames, len(spans) - self.config.recent_frames - 1))
         if not indices or self.query_history is None:
             raise RuntimeError("FrameFold has no eligible history pair or completed query probes.")
-        pooled_key = self._pool(rotate(key, 0))
+        positions = self._frame_positions(spans)
+        pooled_key = self._pool(rotate(key, positions))
         pooled_value = self._pool(value)
         left = torch.tensor(indices, device=key.device)
         right = left + 1
@@ -128,7 +135,7 @@ class FrameFoldLayerCache:
                         (weight * key[index].float() + (1 - weight) * key[index + 1].float())
                         .to(key.dtype)
                         .unsqueeze(0),
-                        index,
+                        positions[index],
                     )
                 )
                 for index, weight in zip(indices, beta)
@@ -162,6 +169,8 @@ class FrameFoldLayerCache:
             raise ValueError("FrameFold Q/K/V geometry and dtype must match the reserved storage.")
         if key.shape[0] % self.tokens_per_frame or current_start != self.absolute_end:
             raise ValueError("FrameFold blocks must be frame-aligned and contiguous in absolute token positions.")
+        if sum(self.spans) * self.tokens_per_frame != current_start:
+            raise RuntimeError("FrameFold history spans do not cover the committed absolute timeline.")
         frames = key.shape[0] // self.tokens_per_frame
         self.config.validate_block(frames)
         if self._pending_start is not None and (current_start != self._pending_start or frames != self._pending_frames):
@@ -184,11 +193,16 @@ class FrameFoldLayerCache:
             spans[index : index + 2] = [spans[index] + spans[index + 1]]
             plan.append((index, beta, alpha))
         self._pending_start, self._pending_frames, self._plan = current_start, frames, plan
-        query = rotate(query.unflatten(0, (frames, self.tokens_per_frame)), len(spans)).flatten(0, 1)
+        query = rotate(
+            query.unflatten(0, (frames, self.tokens_per_frame)), current_start // self.tokens_per_frame
+        ).flatten(0, 1)
         next_key = torch.cat((history_key.flatten(0, 1), key), 0)
         next_value = torch.cat((history_value.flatten(0, 1), value), 0)
-        encoded_key = rotate(next_key.unflatten(0, (len(spans) + frames, self.tokens_per_frame)), 0).flatten(0, 1)
-        return query, encoded_key, next_key, next_value, spans + [1] * frames
+        next_spans = spans + [1] * frames
+        encoded_key = rotate(
+            next_key.unflatten(0, (len(next_spans), self.tokens_per_frame)), self._frame_positions(next_spans)
+        ).flatten(0, 1)
+        return query, encoded_key, next_key, next_value, next_spans
 
     def commit(self, query: torch.Tensor, key: torch.Tensor, value: torch.Tensor, spans: list[int]) -> None:
         if self._pending_start is None:
