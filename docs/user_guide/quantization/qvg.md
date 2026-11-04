@@ -105,8 +105,12 @@ reduction guarantee.
 
 LingBot stores pre-RoPE keys and restores the absolute spatial and temporal
 positions after reconstruction. Native paged, direct, and QVG reads use the
-same paged attention entry point. Partial pages are trimmed to the exact sink
-and recent-frame window. Ulysses head ownership is preserved.
+same attention entry point. Partial pages are trimmed to the exact sink
+and recent-frame window. On CUDA, `VLLM_OMNI_AR_DIFFUSION_KV_GATHER=1`
+selects contiguous varlen attention for both native and QVG reads. Reconstructed
+QVG inputs enter the kernel directly without another gather. Use the same
+setting in the reference run: paged and contiguous kernels can differ in
+floating-point accumulation. Ulysses head ownership is preserved.
 It rejects graph/compiled execution, noisy-cell
 pipelines, first-block KV sharing, last-step KV reuse, boundary resets,
 full-history staging reuse, and explicit runtime attention quantization.

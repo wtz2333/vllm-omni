@@ -1354,9 +1354,43 @@ def test_frame_window_attention_excludes_partial_page_boundary_tokens(tokens_per
         state.close()
 
 
+@pytest.mark.cpu
+def test_cropped_window_preserves_causal_contract():
+    cache, state = make_state(chunk_size=24, sink_chunks=1, window_chunks=2)
+    tensor = torch.zeros(24, N_HEADS, HEAD_DIM)
+    try:
+        for chunk in range(4):
+            layer = state.get_kv_caches(POS, seq_len=24, commit_current=True)[0]
+            layer.forward_ctx.prepare(torch.device("cpu"), action_len=0, query_len=24)
+            inputs = layer.to_layer_inputs()
+            paged_write_attn(inputs, tensor, tensor, tensor, None, None, HEAD_DIM**-0.5)
+            if chunk == 3:
+                assert inputs.visible_slots is not None
+                with pytest.raises(NotImplementedError, match="causal"):
+                    ar_diffusion_paged_attention(
+                        tensor,
+                        cache.key_cache(0),
+                        cache.value_cache(0),
+                        block_table=inputs.block_table,
+                        query_start_loc=inputs.query_start_loc,
+                        seq_lens=inputs.seq_lens,
+                        max_query_len=24,
+                        max_seq_len=inputs.max_seq_len,
+                        softmax_scale=HEAD_DIM**-0.5,
+                        causal=True,
+                        visible_slots=inputs.visible_slots,
+                        packed_block_table=inputs.packed_block_table,
+                    )
+            state.commit_paged_context(POS)
+    finally:
+        state.close()
+
+
+@pytest.mark.parametrize("gather", [False, True])
 @hardware_test(res={"cuda": "H100"}, num_cards=1)
-def test_ragged_frame_window_matches_contiguous_read_on_real_kernel():
+def test_ragged_frame_window_matches_contiguous_read_on_real_kernel(gather, monkeypatch):
     _require_gpu_flash_attn()
+    monkeypatch.setenv(KV_GATHER_ENV, str(int(gather)))
     torch.manual_seed(0)
     device = torch.device("cuda")
     config = ARDiffusionKVConfig(enable=True, chunk_size=1560, window_chunks=9, sink_chunks=9)

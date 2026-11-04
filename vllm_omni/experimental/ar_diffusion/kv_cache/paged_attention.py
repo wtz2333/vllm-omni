@@ -777,6 +777,7 @@ def ar_diffusion_paged_attention(
             query_start_loc=query_start_loc,
             seq_lens=seq_lens,
             max_seq_len=max_seq_len,
+            causal=causal,
         )
     batched = query.dim() == 4
     if batched:
@@ -868,10 +869,7 @@ def ar_diffusion_paged_attention(
         # frame-sized block (1560 tokens, not a multiple of the FA3 K/V tile)
         # runs ~15-17% slower than the same kernel on contiguous K/V. Gather the
         # visible blocks into a contiguous buffer once per layer and attend
-        # without a block table; ``seqused_k`` masks the tail-padding block.
-        from vllm.vllm_flash_attn import flash_attn_varlen_func
-
-        fa_version = _resolve_fa_version(query_flat.shape[-1])
+        # without a block table; cu_seqlens_k carries the exact visible length.
         block_size = key_cache.shape[1]
         n_blocks = int(max_seq_len) // block_size
         if n_blocks * block_size != int(max_seq_len):
@@ -923,23 +921,20 @@ def ar_diffusion_paged_attention(
                 block_size,
                 first_block=stage_first_block if reuse_history else 0,
             )
-        out = torch.empty_like(query_flat)
-        # Varlen K/V: cu_seqlens_k = [0, kv_len] built on device from seq_lens
-        # (no host sync). Rows past kv_len (the tail-padding block) are never
-        # read, exactly like the ROCm gather path above.
-        cu_seqlens_k = torch.cat((seq_lens.new_zeros(1), seq_lens.to(torch.int32)))
-        flash_attn_varlen_func(
-            q=query_flat,
-            k=k_flat,
-            v=v_flat,
-            out=out,
-            cu_seqlens_q=query_start_loc,
-            max_seqlen_q=int(max_query_len),
-            cu_seqlens_k=cu_seqlens_k,
-            max_seqlen_k=int(max_seq_len),
-            softmax_scale=float(softmax_scale),
-            causal=causal,
-            fa_version=fa_version,
+        # FA 的 masked vector lane 仍可能载入 V；必须清除未写尾页中的 NaN。
+        invalid = (torch.arange(max_seq_len, device=query_flat.device) >= seq_lens[0]).view(-1, 1, 1)
+        k_flat.masked_fill_(invalid, 0)
+        v_flat.masked_fill_(invalid, 0)
+        out = _contiguous_flash_attention(
+            query_flat,
+            k_flat,
+            v_flat,
+            query_start_loc,
+            seq_lens,
+            max_query_len,
+            max_seq_len,
+            softmax_scale,
+            causal,
         )
     else:
         from vllm.vllm_flash_attn import flash_attn_varlen_func as paged_flash_attn_varlen_func
@@ -967,6 +962,37 @@ def ar_diffusion_paged_attention(
     return out
 
 
+def _contiguous_flash_attention(
+    query: torch.Tensor,
+    key: torch.Tensor,
+    value: torch.Tensor,
+    query_start_loc: torch.Tensor,
+    seq_lens: torch.Tensor,
+    max_query_len: int,
+    max_seq_len: int,
+    softmax_scale: float,
+    causal: bool,
+) -> torch.Tensor:
+    from vllm.vllm_flash_attn import flash_attn_varlen_func
+
+    out = torch.empty_like(query)
+    cu_seqlens_k = torch.cat((seq_lens.new_zeros(1), seq_lens.to(torch.int32)))
+    flash_attn_varlen_func(
+        q=query,
+        k=key,
+        v=value,
+        out=out,
+        cu_seqlens_q=query_start_loc,
+        max_seqlen_q=int(max_query_len),
+        cu_seqlens_k=cu_seqlens_k,
+        max_seqlen_k=int(max_seq_len),
+        softmax_scale=float(softmax_scale),
+        causal=causal,
+        fa_version=_resolve_fa_version(query.shape[-1]),
+    )
+    return out
+
+
 # ── Fused write+attend custom op (torch.compile-safe) ──────────────────────
 #
 # One opaque op per layer keeps the compiled DiT block fullgraph: dynamo treats
@@ -986,6 +1012,7 @@ def contiguous_paged_attention(
     query_start_loc: torch.Tensor | None = None,
     seq_lens: torch.Tensor | None = None,
     max_seq_len: int | None = None,
+    causal: bool = False,
 ) -> torch.Tensor:
     if key.dim() == 4:
         if key.shape[0] != 1:
@@ -993,6 +1020,24 @@ def contiguous_paged_attention(
         key, value = key[0], value[0]
     length = key.shape[0]
     query_length = query.shape[1] if query.dim() == 4 else query.shape[0]
+    if query_start_loc is None:
+        query_start_loc = torch.tensor([0, query_length], dtype=torch.int32, device=key.device)
+    if seq_lens is None:
+        seq_lens = torch.tensor([length], dtype=torch.int32, device=key.device)
+    if key.is_cuda and torch.version.hip is None and contiguous_kv_gather_enabled():
+        # 连续输入直接进入同一 varlen kernel，避免重新分页后再次复制全部历史。
+        out = _contiguous_flash_attention(
+            query.flatten(0, 1) if query.dim() == 4 else query,
+            key,
+            value,
+            query_start_loc,
+            seq_lens,
+            query_length,
+            max_seq_len if max_seq_len is not None else length,
+            softmax_scale,
+            causal,
+        )
+        return out.reshape(query.shape)
     padding = -length % block_size
     if padding:
         # 部分页必须使用有限填充值，避免 masked vector lane 读入未初始化 NaN。
@@ -1009,10 +1054,6 @@ def contiguous_paged_attention(
                 torch.zeros(capacity - blocks, dtype=torch.int32, device=key.device),
             )
         ).unsqueeze(0)
-    if query_start_loc is None:
-        query_start_loc = torch.tensor([0, query_length], dtype=torch.int32, device=key.device)
-    if seq_lens is None:
-        seq_lens = torch.tensor([length], dtype=torch.int32, device=key.device)
     return ar_diffusion_paged_attention(
         query,
         key_cache,
@@ -1023,6 +1064,7 @@ def contiguous_paged_attention(
         max_query_len=query_length,
         max_seq_len=max_seq_len if max_seq_len is not None else length + padding,
         softmax_scale=softmax_scale,
+        causal=causal,
     )
 
 
