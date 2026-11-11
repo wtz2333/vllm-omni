@@ -56,6 +56,7 @@ from vllm_omni.diffusion.models.lingbot_world.camera import (
     resolve_trusted_action_directory,
 )
 from vllm_omni.diffusion.models.lingbot_world.dmd_block import ARBlockContext, LingBotDMDBlockRunner
+from vllm_omni.diffusion.models.lingbot_world.pose_history import PoseHistory
 from vllm_omni.diffusion.models.lingbot_world.transformer import (
     CameraModulationCache,
     CausalLingBotWorldTransformer3DModel,
@@ -201,6 +202,7 @@ class _LingBotARSessionState:
     condition_fixed_point: torch.Tensor | None = None
     camera_tail: CameraTrajectory | None = None
     camera_pitch: float = 0.0
+    pose_history: PoseHistory | None = None
 
 
 def _positive_finite_flow_shift(value: Any) -> float:
@@ -614,6 +616,15 @@ class LingBotWorldCausalDMDPipeline(
         parallel_config = getattr(od_config, "parallel_config", None)
         self.od_config = od_config
         model_config = getattr(od_config, "model_config", None) or {}
+        self._pose_history_enabled = model_config.get("lingbot_pose_history", False)
+        if type(self._pose_history_enabled) is not bool:
+            raise ValueError("model_config.lingbot_pose_history must be a bool.")
+        if self._pose_history_enabled and (
+            not od_config.enforce_eager
+            or getattr(parallel_config, "tensor_parallel_size", 1) != 1
+            or getattr(parallel_config, "sequence_parallel_size", 1) != 1
+        ):
+            raise ValueError("LingBot pose history requires eager execution on one device.")
         from vllm_omni.diffusion.models.lingbot_world.pixel_output import validate_mode
 
         self._lingbot_pixel_output_mode = validate_mode(model_config.get("lingbot_npu_pixel_output_mode", "native"))
@@ -623,6 +634,8 @@ class LingBotWorldCausalDMDPipeline(
         reuse_last_step_kv = model_config.get("lingbot_reuse_last_step_kv", False)
         if not isinstance(reuse_last_step_kv, bool):
             raise ValueError("model_config.lingbot_reuse_last_step_kv must be a bool.")
+        if self._pose_history_enabled and reuse_last_step_kv:
+            raise ValueError("LingBot pose history requires clean-x0 KV commits.")
         self._reuse_last_step_kv = reuse_last_step_kv
         share_first_block = model_config.get("lingbot_share_first_block_kv", False)
         if not isinstance(share_first_block, bool):
@@ -802,6 +815,18 @@ class LingBotWorldCausalDMDPipeline(
             * int(self.transformer.config.attention_head_dim)
             * element_size
         )
+        pose_reference_bytes = 0
+        if getattr(self, "_pose_history_enabled", False):
+            full_tokens = tokens_per_frame * condition_latent_frames
+            selected_tokens = min(tokens_per_frame, 810) * condition_latent_frames
+            pose_reference_bytes = (
+                2
+                * int(self.transformer.config.num_layers)
+                * (full_tokens + selected_tokens)
+                * int(self.transformer.blocks[0].self_attn.num_sp_heads)
+                * int(self.transformer.config.attention_head_dim)
+                * element_size
+            )
         return ARDiffusionKVCacheSpec(
             num_layers=int(self.transformer.config.num_layers),
             num_kv_heads=int(self.transformer.blocks[0].self_attn.num_sp_heads),
@@ -811,7 +836,7 @@ class LingBotWorldCausalDMDPipeline(
             window_frames=recent_window_frames,
             sink_frames=sink_frames,
             kv_branches=(ARDiffusionKVBranchSpec(self._AR_BRANCH, 0),),
-            session_capacity=2,
+            session_capacity=1 if getattr(self, "_pose_history_enabled", False) else 2,
             cross_attention=(
                 ARDiffusionCrossAttentionKVSpec(
                     self._AR_TEXT_CACHE,
@@ -824,6 +849,7 @@ class LingBotWorldCausalDMDPipeline(
             model_owned_state_bytes_per_session=(
                 condition_bytes_per_session
                 + camera_bytes_per_session
+                + pose_reference_bytes
                 + 2 * self._condition_encoder_cache_bytes()  # Committed and in-flight histories.
                 + self._streaming_decode_bytes_per_session()
             ),
@@ -911,6 +937,8 @@ class LingBotWorldCausalDMDPipeline(
             state.encoder_cache = None
             state.pending_encoder_cache = None
             state.condition_fixed_point = None
+            if state.pose_history is not None:
+                state.pose_history.close()
 
     def reset_ar_diffusion_session(self, session_id: str) -> None:
         self._release_condition_encoder_state(session_id)
@@ -1575,6 +1603,8 @@ class LingBotWorldCausalDMDPipeline(
         return prompt_embeds
 
     def forward(self, req: DiffusionRequestBatch) -> DiffusionOutput:
+        if getattr(self, "_pose_history_enabled", False):
+            raise ValueError("LingBot pose history requires step execution.")
         inputs = self._parse_request(req)
         if inputs.camera_action_script is not None:
             # Only step execution walks a whole rollout inside one request, so
@@ -2049,7 +2079,15 @@ class LingBotWorldCausalDMDPipeline(
             invalidate=False,
             condition_revision=(inputs.prompt, int(inputs.max_sequence_length), str(prompt_embeds.dtype)),
         )
-        self._ar_sessions[state.request_id] = _LingBotARSessionState()
+        pose_history = None
+        if getattr(self, "_pose_history_enabled", False):
+            config = self.transformer.config
+            window = config.local_attn_size if config.local_attn_size != -1 else config.sliding_window_num_frames
+            pose_history = PoseHistory(
+                sink_frames=int(config.sink_size),
+                recent_frames=int(window) - int(config.sink_size) - block_frames,
+            )
+        self._ar_sessions[state.request_id] = _LingBotARSessionState(pose_history=pose_history)
         return state
 
     def _prepare_next_chunk(self, state: StepRequestState) -> None:
@@ -2084,6 +2122,7 @@ class LingBotWorldCausalDMDPipeline(
                 initial_pose=(previous.poses[-1] if previous is not None else None),
                 initial_pitch=float(extra.get("camera_pitch", 0.0)),
             )
+            chunk_trajectory = action_trajectory
             extra["camera_pitch"] = camera_pitch
             media_frames = self._chunk_media_frame_count(state, block_frames=block_frames)
             chunk_inputs = replace(
@@ -2106,6 +2145,10 @@ class LingBotWorldCausalDMDPipeline(
             ):
                 raise ValueError("Cannot use mid-generation camera interaction together with camera_embedding_cache; ")
             trajectory = extra["camera_trajectory_cache"]
+            chunk_trajectory = CameraTrajectory(
+                poses=trajectory.poses[start_frame:stop_frame],
+                intrinsics=trajectory.intrinsics[start_frame:stop_frame],
+            )
             camera = extra["camera_embedding_cache"][:, :, start_frame:stop_frame]
             camera_tail = CameraTrajectory(
                 poses=trajectory.poses[stop_frame - 1 : stop_frame].clone(),
@@ -2133,6 +2176,7 @@ class LingBotWorldCausalDMDPipeline(
                 width=inputs.width,
                 height=inputs.height,
             )
+            chunk_trajectory = action_trajectory
             chunk_inputs = replace(
                 inputs,
                 camera_trajectory=action_trajectory,
@@ -2171,6 +2215,32 @@ class LingBotWorldCausalDMDPipeline(
             invalidate=False,
             condition_revision=(inputs.prompt, int(inputs.max_sequence_length), str(state.prompt_embeds.dtype)),
         )
+        if session_state.pose_history is not None:
+            extra["pose_history_trajectory"] = chunk_trajectory
+            prepared, reason = session_state.pose_history.prepare(
+                start_frame=start_frame,
+                poses=chunk_trajectory.poses,
+                intrinsics=chunk_trajectory.intrinsics,
+                device=self.device,
+            )
+            history_metadata: dict[str, Any] = {"status": reason}
+            if prepared is not None:
+                extra["pose_reference"] = self._dmd_blocks.prepare_pose_reference(
+                    prepared=prepared,
+                    condition=condition,
+                    camera=camera,
+                    prompt_embeds=cast(torch.Tensor, state.prompt_embeds),
+                    ar=self._ar_block_context(extra["ar_cross_attention"]),
+                    start_frame=start_frame,
+                    camera_cache=extra["camera_cache"],
+                )
+                history_metadata.update(
+                    source_chunk=prepared.source_chunk,
+                    minimum_overlap=prepared.minimum_overlap,
+                    reference_tokens=int(prepared.token_indices.numel()),
+                )
+            extra["pose_history_metadata"] = history_metadata
+            logger.info("LingBot pose history chunk %d: %s", state.chunk_index, history_metadata)
         state.latents = randn_tensor(
             (
                 1,
@@ -2224,6 +2294,7 @@ class LingBotWorldCausalDMDPipeline(
             timestep_value=float(schedule[step_in_chunk][0]),
             step_index=step_in_chunk,
             camera_cache=extra["camera_cache"],
+            **({"pose_reference": extra["pose_reference"]} if "pose_reference" in extra else {}),
         )
 
     def step_scheduler(self, state: StepRequestState, noise_pred: torch.Tensor, **kwargs: Any) -> None:
@@ -2247,6 +2318,8 @@ class LingBotWorldCausalDMDPipeline(
         )
         state.step_in_chunk += 1
         state.step_index = state.step_in_chunk
+        if state.step_in_chunk >= 2:
+            extra.pop("pose_reference", None)
 
     def post_decode(self, state: StepRequestState, **kwargs: Any) -> DiffusionOutput:
         del kwargs
@@ -2278,6 +2351,15 @@ class LingBotWorldCausalDMDPipeline(
         else:
             pixels = self._decode_chunk_to_pixels(latents, session_id=state.request_id)
             payload = {} if pixels is None else {"video": pixels}
+        if session_state.pose_history is not None:
+            trajectory = extra.pop("pose_history_trajectory")
+            session_state.pose_history.observe(
+                chunk_index=completed_chunk_index,
+                start_frame=int(extra["start_frame"]),
+                latents=latents,
+                poses=trajectory.poses,
+                intrinsics=trajectory.intrinsics,
+            )
         output = {
             "payload": payload,
             "metadata": {
@@ -2289,6 +2371,8 @@ class LingBotWorldCausalDMDPipeline(
                 ).to_dict()
             },
         }
+        if session_state.pose_history is not None:
+            output["metadata"]["pose_history"] = extra.pop("pose_history_metadata")
         session_state.encoder_cache = session_state.pending_encoder_cache
         session_state.pending_encoder_cache = None
         session_state.next_chunk_index += 1

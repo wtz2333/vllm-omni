@@ -594,6 +594,20 @@ def test_session_admission_accounts_for_the_streaming_decoder_cache() -> None:
     assert bare.ar_diffusion_kv_cache_spec().model_owned_state_bytes_per_session == 960 + 384 + 2 * 6_656
 
 
+def test_pose_history_admission_accounts_for_full_and_selected_reference_kv() -> None:
+    module = _load_pipeline_module()
+    baseline = _pipeline(module)
+    config = _od_config()
+    config.model_config["lingbot_pose_history"] = True
+    candidate = _pipeline(module, od_config=config)
+    baseline_spec = baseline.ar_diffusion_kv_cache_spec()
+    candidate_spec = candidate.ar_diffusion_kv_cache_spec()
+    # Two layers, 3 full and 3 selected tokens, two heads, four channels, FP32 K/V.
+    assert candidate_spec.model_owned_state_bytes_per_session - baseline_spec.model_owned_state_bytes_per_session == 768
+    assert baseline_spec.session_capacity == 2
+    assert candidate_spec.session_capacity == 1
+
+
 @pytest.mark.parametrize("sp_size", [1, 4])
 def test_session_admission_budgets_camera_modulation_per_rank(sp_size: int) -> None:
     pipeline = _pipeline(_load_pipeline_module())
@@ -2716,6 +2730,52 @@ def test_stepwise_emits_latents_without_touching_the_vae() -> None:
 
     assert [set(output.output["payload"]) for output in outputs] == [{"latents"}, {"latents"}]
     assert pipeline.vae.decode_inputs == []
+
+
+def test_pose_history_is_used_only_for_the_first_two_probes_and_released() -> None:
+    class RecordingReferenceTransformer(_RecordingTransformer):
+        def __init__(self):
+            super().__init__()
+            self.reference_calls = []
+
+        def forward(self, **kwargs):
+            self.reference_calls.append(
+                (kwargs["start_frame"], getattr(kwargs["cache"], "reference_attention", None) is not None)
+            )
+            return super().forward(**kwargs)
+
+    module = _load_pipeline_module()
+    transformer = RecordingReferenceTransformer()
+    config = _od_config()
+    config.model_config["lingbot_pose_history"] = True
+    pipeline = _pipeline(module, transformer=transformer, od_config=config)
+    pipeline._ar_height = 16
+    pipeline._ar_width = 16
+    state = _stepwise_state(num_frames=45)
+    fake = _FakeARState(state.request_id)
+
+    with pipeline.bind_ar_diffusion_state(state.request_id, fake):
+        outputs = _run_stepwise(pipeline, state)
+
+    assert [output.output["metadata"]["pose_history"]["status"] for output in outputs] == [
+        "no_eligible_history",
+        "no_eligible_history",
+        "no_eligible_history",
+        "hit",
+    ]
+    assert outputs[-1].output["metadata"]["pose_history"]["source_chunk"] == 2
+    assert [used for start, used in transformer.reference_calls if start == 9] == [
+        False,
+        True,
+        True,
+        False,
+        False,
+        False,
+    ]
+    history = pipeline._ar_sessions[state.request_id].pose_history
+    assert history is not None and history.entries
+    pipeline.reset_ar_diffusion_session(state.request_id)
+    assert not history.entries
 
 
 def _capture_pixel_conversion(monkeypatch) -> list[tuple[int, ...]]:
