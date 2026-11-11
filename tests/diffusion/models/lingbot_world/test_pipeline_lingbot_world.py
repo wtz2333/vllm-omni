@@ -6,6 +6,7 @@ from __future__ import annotations
 import gc
 import os
 import weakref
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
@@ -3197,6 +3198,31 @@ def test_the_text_encoder_runs_once_per_distinct_prompt() -> None:
         "move through the room",
         "move through the room",
     ]
+
+
+def test_prompt_encoding_releases_offloaded_encoder_and_skips_cached_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    from vllm_omni.diffusion.offloader import sequential_backend
+
+    module = _load_pipeline_module()
+    config = _od_config(diffusion_offload_config={"mode": "module", "components": ["text_encoder"]})
+    pipeline = _pipeline(module, od_config=config)
+    encoded = _counting_text_encoder(pipeline)
+    events = []
+
+    @contextmanager
+    def component_context(component):
+        assert component is pipeline.text_encoder
+        events.append("enter")
+        try:
+            yield
+        finally:
+            events.append("exit")
+
+    monkeypatch.setattr(sequential_backend, "sequential_offload_component", component_context)
+    first = pipeline.encode_prompt("move", max_sequence_length=512, dtype=torch.float32)
+    assert pipeline.encode_prompt("move", max_sequence_length=512, dtype=torch.float32) is first
+    assert encoded == ["move"]
+    assert events == ["enter", "exit"]
 
 
 def test_the_prompt_encode_cache_is_bounded() -> None:

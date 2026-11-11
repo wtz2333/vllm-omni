@@ -263,6 +263,34 @@ def test_model_level_backend_keeps_declared_image_encoder_resident() -> None:
 
 
 @pytest.mark.parametrize(
+    ("components", "expects_placement"), [(frozenset({"text_encoder"}), True), (frozenset({"dit"}), False)]
+)
+def test_model_level_places_only_unselected_dit_before_forward(
+    monkeypatch: pytest.MonkeyPatch, components: frozenset[str], expects_placement: bool
+) -> None:
+    pipeline = nn.Module()
+    pipeline.transformer = _create_simple_module()
+    pipeline.text_encoder = _create_simple_module()
+    backend = ModelLevelOffloadBackend(
+        OffloadConfig(strategy=OffloadStrategy.MODEL_LEVEL, components=components, pin_cpu_memory=False),
+        torch.device("cpu"),
+    )
+    moves = []
+    original_move = SequentialOffloadHook._move_params
+
+    def record_move(module, target_device, **kwargs):
+        moves.append((module, target_device))
+        return original_move(module, target_device, **kwargs)
+
+    monkeypatch.setattr(SequentialOffloadHook, "_move_params", staticmethod(record_move))
+    backend.enable(pipeline)
+    try:
+        assert ((pipeline.transformer, torch.device("cpu")) in moves) is expects_placement
+    finally:
+        backend.disable()
+
+
+@pytest.mark.parametrize(
     ("component", "attribute", "message"),
     [
         ("text_encoder", "text_encoder", "requires a DiT/transformer"),
