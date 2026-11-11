@@ -67,6 +67,8 @@ class LingBotTransformerCache:
 
     self_attention: list[LingBotAttentionCache | ARDiffusionPagedLayerContext | ARDiffusionPagedLayerInputs]
     cross_attention: list[LingBotAttentionCache | None]
+    reference_attention: list[tuple[torch.Tensor, torch.Tensor]] | None = None
+    reference_bounds: torch.Tensor | None = None
 
 
 def allocate_lingbot_cache(
@@ -322,6 +324,8 @@ class LingBotSelfAttention(nn.Module):
         sink_tokens: int,
         update_cache: bool = True,
         _projection_lease: Lease | None = None,
+        reference_kv: tuple[torch.Tensor, torch.Tensor] | None = None,
+        reference_bounds: torch.Tensor | None = None,
     ) -> torch.Tensor:
         # Project logical [B, S, D] tokens into TP-local
         # [B, S, num_local_heads, head_dim].
@@ -355,16 +359,34 @@ class LingBotSelfAttention(nn.Module):
         if isinstance(cache, ARDiffusionPagedLayerInputs):
             if query.shape[0] != 1:
                 raise RuntimeError("LingBot AR-Diffusion paged attention requires batch_size=1.")
-            output = paged_write_attn(
-                cache,
-                query[0],
-                key[0],
-                value[0],
-                None,
-                None,
-                self.head_dim**-0.5,
-            ).unsqueeze(0)
+            if reference_kv is None:
+                output = paged_write_attn(
+                    cache,
+                    query[0],
+                    key[0],
+                    value[0],
+                    None,
+                    None,
+                    self.head_dim**-0.5,
+                ).unsqueeze(0)
+            else:
+                if reference_bounds is None or self.ulysses_world_size != 1 or _projection_lease is not None:
+                    raise ValueError("Pose history requires bounds and single-device eager attention.")
+                from vllm_omni.diffusion.models.lingbot_world.pose_history import paged_history_attention
+
+                output = paged_history_attention(
+                    cache,
+                    query[0],
+                    key[0],
+                    value[0],
+                    reference_kv[0],
+                    reference_kv[1],
+                    reference_bounds,
+                    softmax_scale=self.head_dim**-0.5,
+                ).unsqueeze(0)
         else:
+            if reference_kv is not None:
+                raise ValueError("Pose history reference attention requires paged request-local KV.")
             # The direct path sees history + current K/V even when the caller
             # asks not to mutate persistent cache state.
             visible_key, visible_value = self._update_cache(
@@ -670,6 +692,8 @@ class LingBotAttentionBlock(nn.Module):
         update_cache: bool,
         rotary_emb: tuple[torch.Tensor, torch.Tensor],
         camera_modulation: tuple[torch.Tensor, torch.Tensor] | None = None,
+        reference_kv: tuple[torch.Tensor, torch.Tensor] | None = None,
+        reference_bounds: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, LingBotAttentionCache]:
         batch_size, token_count, dim = hidden_states.shape
         if (
@@ -691,6 +715,9 @@ class LingBotAttentionBlock(nn.Module):
 
         normalized = self.norm1(hidden_states.float()).unflatten(1, (num_frames, tokens_per_frame))
         normalized = (normalized * (1 + scale_msa) + shift_msa).flatten(1, 2).to(hidden_states.dtype)
+        reference_kwargs = (
+            {"reference_kv": reference_kv, "reference_bounds": reference_bounds} if reference_kv is not None else {}
+        )
         if hasattr(self, "_lingbot_leased_post_attention"):
             from vllm_omni.diffusion.models.lingbot_world.leased_post_attention import acquire
 
@@ -707,6 +734,7 @@ class LingBotAttentionBlock(nn.Module):
                     sink_tokens=sink_tokens,
                     update_cache=update_cache,
                     **projection_kwargs,
+                    **reference_kwargs,
                 )
                 hidden_states, cross_cache = self._post_attention(
                     hidden_states,
@@ -729,6 +757,7 @@ class LingBotAttentionBlock(nn.Module):
                 rotary_emb=rotary_emb,
                 sink_tokens=sink_tokens,
                 update_cache=update_cache,
+                **reference_kwargs,
             )
             hidden_states, cross_cache = self._post_attention(
                 hidden_states,
@@ -1410,6 +1439,14 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
                 if camera_modulation is None:
                     camera_modulation = block.camera_modulation(camera_hidden_states)
                     camera_modulation_cache.entries[index] = camera_modulation
+            reference_kwargs = (
+                {
+                    "reference_kv": cache.reference_attention[index],
+                    "reference_bounds": cache.reference_bounds,
+                }
+                if cache.reference_attention is not None
+                else {}
+            )
             hidden_states, cross_cache = block(
                 hidden_states,
                 projected_text if cache.cross_attention[index] is None else None,
@@ -1422,6 +1459,7 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
                 sink_tokens=sink_tokens,
                 update_cache=update_cache,
                 rotary_emb=rotary_emb,
+                **reference_kwargs,
             )
             cache.cross_attention[index] = cross_cache
 
