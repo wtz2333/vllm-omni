@@ -23,10 +23,12 @@ from diffusers.utils.torch_utils import randn_tensor
 from vllm.logger import init_logger
 
 from vllm_omni.diffusion.forward_context import set_forward_context_denoise_step_idx
+from vllm_omni.diffusion.models.lingbot_world.pose_history import PoseReferenceKV, PreparedPoseHistory
 from vllm_omni.diffusion.models.lingbot_world.transformer import (
     CameraModulationCache,
     LingBotAttentionCache,
     LingBotTransformerCache,
+    allocate_lingbot_cache,
 )
 from vllm_omni.experimental.ar_diffusion.kv_cache.first_block import (
     FirstBlockKVKey,
@@ -122,6 +124,52 @@ class LingBotDMDBlockRunner:
 
     # ── one block ────────────────────────────────────────────────────────
 
+    @torch.inference_mode()
+    def prepare_pose_reference(
+        self,
+        *,
+        prepared: PreparedPoseHistory,
+        condition: torch.Tensor,
+        camera: torch.Tensor,
+        prompt_embeds: torch.Tensor,
+        ar: ARBlockContext,
+        start_frame: int,
+        camera_cache: CameraModulationCache,
+    ) -> PoseReferenceKV:
+        config = self.transformer.config
+        patch_frames, patch_height, patch_width = config.patch_size
+        tokens = (
+            condition.shape[2]
+            // patch_frames
+            * (condition.shape[3] // patch_height)
+            * (condition.shape[4] // patch_width)
+        )
+        temporary = allocate_lingbot_cache(
+            batch_size=1,
+            num_layers=config.num_layers,
+            max_tokens=tokens,
+            num_local_heads=self.transformer.blocks[0].self_attn.num_sp_heads,
+            head_dim=config.attention_head_dim,
+            device=condition.device,
+            dtype=condition.dtype,
+        )
+        temporary.cross_attention = list(ar.cross_attention)
+        self.transformer(
+            hidden_states=torch.cat((prepared.latents.to(dtype=condition.dtype), condition), dim=1),
+            timestep=torch.zeros(1, device=self.device, dtype=torch.float32),
+            encoder_hidden_states=prompt_embeds,
+            camera_hidden_states=camera,
+            cache=temporary,
+            start_frame=start_frame,
+            update_cache=True,
+            camera_modulation_cache=camera_cache,
+        )
+        layers = [
+            (layer.key.index_select(1, prepared.token_indices), layer.value.index_select(1, prepared.token_indices))
+            for layer in temporary.self_attention
+        ]
+        return PoseReferenceKV(layers=layers, query_bounds=prepared.query_bounds)
+
     def probe_step(
         self,
         *,
@@ -135,6 +183,7 @@ class LingBotDMDBlockRunner:
         timestep_value: float,
         step_index: int,
         camera_cache: CameraModulationCache | None = None,
+        pose_reference: PoseReferenceKV | None = None,
     ) -> torch.Tensor:
         """Predict flow for one denoise step.
 
@@ -153,12 +202,18 @@ class LingBotDMDBlockRunner:
         # [noise/x_t(16), temporal_mask(4), image_latent(16)] -> 36.
         model_input = torch.cat((current_latents.to(dtype=condition.dtype), condition), dim=1)
         commit_probe = self.reuse_last_step_kv and step_index == 3
+        block_cache = self._block_cache(condition=condition, cache=cache, ar=ar, commit_current=commit_probe)
+        if pose_reference is not None:
+            if ar is None or step_index >= 2 or commit_probe:
+                raise ValueError("Pose history reference is valid only for the first two paged denoise steps.")
+            block_cache.reference_attention = pose_reference.layers
+            block_cache.reference_bounds = pose_reference.query_bounds
         flow_prediction = self.transformer(
             hidden_states=model_input,
             timestep=timestep,
             encoder_hidden_states=prompt_embeds,
             camera_hidden_states=camera,
-            cache=self._block_cache(condition=condition, cache=cache, ar=ar, commit_current=commit_probe),
+            cache=block_cache,
             start_frame=start_frame,
             update_cache=commit_probe,
             camera_modulation_cache=camera_cache,

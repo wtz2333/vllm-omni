@@ -198,6 +198,18 @@ steps followed by one streamed chunk. Identity metadata uses
 Camera motion can be request-scoped (`camera_action_script` / `action_path`) or
 updated mid-session via `session.interaction`.
 
+To enable the experimental pose-history plugin, copy the stepwise deploy file
+and set `lingbot_pose_history: true` in the stage's `model_config`. Pass that
+file as `deploy_config` to `AsyncOmni` or as `--deploy-config` to the server.
+It requires `enforce_eager: true`, one CUDA device, and clean-x0 KV commits.
+Each session retains up to eight historical latent blocks and uses a
+rotation-only view transform to prepare auxiliary reference KV for the first
+two denoising steps. A reference is used only when its commanded camera center
+matches the current block and enough of its view overlaps. Translation,
+occlusion, and independently moving objects are not reconstructed. The
+`pose_history` chunk metadata records hits and skipped reads; model-owned
+history is released when the session is reset or closed.
+
 Serve it with the AR-Diffusion deploy config, which selects the AR-Diffusion
 engine and enables streamed step execution:
 

@@ -6,6 +6,7 @@ from __future__ import annotations
 import gc
 import os
 import weakref
+from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
 from types import SimpleNamespace
@@ -592,6 +593,20 @@ def test_session_admission_accounts_for_the_streaming_decoder_cache() -> None:
             delattr(bare.vae, attribute)
     bare.vae._cached_conv_counts.pop("decoder")
     assert bare.ar_diffusion_kv_cache_spec().model_owned_state_bytes_per_session == 960 + 384 + 2 * 6_656
+
+
+def test_pose_history_admission_accounts_for_full_and_selected_reference_kv() -> None:
+    module = _load_pipeline_module()
+    baseline = _pipeline(module)
+    config = _od_config()
+    config.model_config["lingbot_pose_history"] = True
+    candidate = _pipeline(module, od_config=config)
+    baseline_spec = baseline.ar_diffusion_kv_cache_spec()
+    candidate_spec = candidate.ar_diffusion_kv_cache_spec()
+    # Two layers, 3 full and 3 selected tokens, two heads, four channels, FP32 K/V.
+    assert candidate_spec.model_owned_state_bytes_per_session - baseline_spec.model_owned_state_bytes_per_session == 768
+    assert baseline_spec.session_capacity == 2
+    assert candidate_spec.session_capacity == 1
 
 
 @pytest.mark.parametrize("sp_size", [1, 4])
@@ -2718,6 +2733,52 @@ def test_stepwise_emits_latents_without_touching_the_vae() -> None:
     assert pipeline.vae.decode_inputs == []
 
 
+def test_pose_history_is_used_only_for_the_first_two_probes_and_released() -> None:
+    class RecordingReferenceTransformer(_RecordingTransformer):
+        def __init__(self):
+            super().__init__()
+            self.reference_calls = []
+
+        def forward(self, **kwargs):
+            self.reference_calls.append(
+                (kwargs["start_frame"], getattr(kwargs["cache"], "reference_attention", None) is not None)
+            )
+            return super().forward(**kwargs)
+
+    module = _load_pipeline_module()
+    transformer = RecordingReferenceTransformer()
+    config = _od_config()
+    config.model_config["lingbot_pose_history"] = True
+    pipeline = _pipeline(module, transformer=transformer, od_config=config)
+    pipeline._ar_height = 16
+    pipeline._ar_width = 16
+    state = _stepwise_state(num_frames=45)
+    fake = _FakeARState(state.request_id)
+
+    with pipeline.bind_ar_diffusion_state(state.request_id, fake):
+        outputs = _run_stepwise(pipeline, state)
+
+    assert [output.output["metadata"]["pose_history"]["status"] for output in outputs] == [
+        "no_eligible_history",
+        "no_eligible_history",
+        "no_eligible_history",
+        "hit",
+    ]
+    assert outputs[-1].output["metadata"]["pose_history"]["source_chunk"] == 2
+    assert [used for start, used in transformer.reference_calls if start == 9] == [
+        False,
+        True,
+        True,
+        False,
+        False,
+        False,
+    ]
+    history = pipeline._ar_sessions[state.request_id].pose_history
+    assert history is not None and history.entries
+    pipeline.reset_ar_diffusion_session(state.request_id)
+    assert not history.entries
+
+
 def _capture_pixel_conversion(monkeypatch) -> list[tuple[int, ...]]:
     """Record each decoded block reaching the uint8 conversion, and name its output."""
     module = _load_pipeline_module()
@@ -3137,6 +3198,31 @@ def test_the_text_encoder_runs_once_per_distinct_prompt() -> None:
         "move through the room",
         "move through the room",
     ]
+
+
+def test_prompt_encoding_releases_offloaded_encoder_and_skips_cached_calls(monkeypatch: pytest.MonkeyPatch) -> None:
+    from vllm_omni.diffusion.offloader import sequential_backend
+
+    module = _load_pipeline_module()
+    config = _od_config(diffusion_offload_config={"mode": "module", "components": ["text_encoder"]})
+    pipeline = _pipeline(module, od_config=config)
+    encoded = _counting_text_encoder(pipeline)
+    events = []
+
+    @contextmanager
+    def component_context(component):
+        assert component is pipeline.text_encoder
+        events.append("enter")
+        try:
+            yield
+        finally:
+            events.append("exit")
+
+    monkeypatch.setattr(sequential_backend, "sequential_offload_component", component_context)
+    first = pipeline.encode_prompt("move", max_sequence_length=512, dtype=torch.float32)
+    assert pipeline.encode_prompt("move", max_sequence_length=512, dtype=torch.float32) is first
+    assert encoded == ["move"]
+    assert events == ["enter", "exit"]
 
 
 def test_the_prompt_encode_cache_is_bounded() -> None:
