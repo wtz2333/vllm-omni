@@ -2,8 +2,9 @@
 # SPDX-FileCopyrightText: Copyright contributors to the vLLM-Omni project
 # Adapted from Tencent-Hunyuan/Hy-Nomas (Copyright 2026 Tencent).
 
-from collections import OrderedDict
+from collections import Counter, OrderedDict
 from collections.abc import Sequence
+from dataclasses import dataclass
 from functools import cache
 
 import numpy as np
@@ -93,11 +94,68 @@ def build_range_mask(q_length, k_length, ranges, device, query_mask, key_mask):
     )
 
 
+@dataclass(frozen=True)
+class _PackedAttentionMask:
+    shape: tuple[int, int]
+    query_index: slice | torch.Tensor
+    key_index: slice | torch.Tensor
+    query_count: int
+    key_count: int
+    cu_query: torch.Tensor
+    cu_key: torch.Tensor
+
+
+AttentionMask = BlockMask | _PackedAttentionMask | None
+
+
+def _visible_index(visibility: np.ndarray, device: torch.device) -> tuple[slice | torch.Tensor, int]:
+    indices = np.flatnonzero(visibility)
+    count = len(indices)
+    if count == 0:
+        return slice(0, 0), 0
+    start, end = int(indices[0]), int(indices[-1]) + 1
+    if end - start == count:
+        return slice(start, end), count
+    return torch.from_numpy(indices).to(device), count
+
+
+def _pack_mask(query: np.ndarray, key: np.ndarray, device: torch.device) -> _PackedAttentionMask:
+    query_index, query_count = _visible_index(query, device)
+    key_index, key_count = _visible_index(key, device)
+    return _PackedAttentionMask(
+        (len(query), len(key)),
+        query_index,
+        key_index,
+        query_count,
+        key_count,
+        torch.tensor([0, query_count], dtype=torch.int32, device=device),
+        torch.tensor([0, key_count], dtype=torch.int32, device=device),
+    )
+
+
+def _select_tokens(tensor: torch.Tensor, index: slice | torch.Tensor) -> torch.Tensor:
+    return tensor[index] if isinstance(index, slice) else tensor.index_select(0, index)
+
+
 class RangeAttention(nn.Module):
-    def __init__(self, softmax_scale: float):
+    def __init__(self, softmax_scale: float, *, backend: str = "flex"):
         super().__init__()
         self.softmax_scale = softmax_scale
-        self.masks: OrderedDict[tuple, BlockMask] = OrderedDict()
+        self.backend = backend
+        self.masks: OrderedDict[tuple, BlockMask | _PackedAttentionMask] = OrderedDict()
+        self.backend_hits: dict[str, Counter[str]] = {"denoise": Counter(), "kv_commit": Counter()}
+        self._flash_attn_varlen = None
+        if backend == "fa3":
+            from vllm.vllm_flash_attn.flash_attn_interface import (
+                fa_version_unsupported_reason,
+                flash_attn_varlen_func,
+            )
+
+            if (reason := fa_version_unsupported_reason(3)) is not None:
+                raise ValueError(f"Hy-Nomas dit_attention_backend='fa3' is unavailable: {reason}")
+            self._flash_attn_varlen = flash_attn_varlen_func
+        elif backend != "flex":
+            raise ValueError(f"Unsupported Hy-Nomas dit_attention_backend: {backend!r}")
 
     def clear(self) -> None:
         self.masks.clear()
@@ -112,7 +170,7 @@ class RangeAttention(nn.Module):
         ranges: Sequence[Sequence[tuple[int, int, int, int]]] | None = None,
         query_mask: torch.Tensor | None = None,
         key_mask: torch.Tensor | None = None,
-    ) -> tuple[BlockMask | None, ...]:
+    ) -> tuple[AttentionMask, ...]:
         target_device = torch.device(device)
         if q_length < 0 or k_length < 0 or batch_size < 0:
             raise ValueError("Hy-Nomas attention requires non-negative lengths and batch size.")
@@ -125,23 +183,62 @@ class RangeAttention(nn.Module):
                 raise ValueError("Hy-Nomas attention requires Boolean visibility masks matching Q/K.")
         if not q_length or not k_length:
             return (None,) * batch_size
-        resolved: list[BlockMask | None] = []
+        resolved: list[AttentionMask] = []
         device_str = str(target_device)
+        # 只有无区间约束时，所有有效 query 才能共用同一组有效 key。
+        pack = self._flash_attn_varlen is not None and ranges is None
         for batch in range(batch_size):
             qr = np.ones(q_length, dtype=bool) if query_mask is None else query_mask[batch].detach().cpu().numpy()
             kr = np.ones(k_length, dtype=bool) if key_mask is None else key_mask[batch].detach().cpu().numpy()
             rectangles = [(0, q_length, 0, k_length)] if ranges is None else ranges[batch]
-            cache_key = (q_length, k_length, device_str, tuple(rectangles), qr.tobytes(), kr.tobytes())
+            cache_key = (q_length, k_length, device_str, pack, tuple(rectangles), qr.tobytes(), kr.tobytes())
             if cache_key not in self.masks:
-                self.masks[cache_key] = build_range_mask(q_length, k_length, rectangles, target_device, qr, kr)
+                self.masks[cache_key] = (
+                    _pack_mask(qr, kr, target_device)
+                    if pack
+                    else build_range_mask(q_length, k_length, rectangles, target_device, qr, kr)
+                )
                 while len(self.masks) > 32:
                     self.masks.popitem(last=False)
             self.masks.move_to_end(cache_key)
             resolved.append(self.masks[cache_key])
         return tuple(resolved)
 
+    def _apply_fa3(self, q, k, v, mask: _PackedAttentionMask, output: torch.Tensor) -> bool:
+        flash_attn = self._flash_attn_varlen
+        if flash_attn is None or q.device.type != "cuda":
+            raise ValueError("Hy-Nomas packed attention requires the CUDA FA3 backend.")
+        if mask.query_count == 0 or mask.key_count == 0:
+            output.zero_()
+            return False
+        query_index = mask.query_index
+        if isinstance(query_index, slice):
+            output[: query_index.start].zero_()
+            output[query_index.stop :].zero_()
+            out = output[query_index]
+        else:
+            out = None
+        result = flash_attn(
+            _select_tokens(q, query_index),
+            _select_tokens(k, mask.key_index),
+            _select_tokens(v, mask.key_index),
+            max_seqlen_q=mask.query_count,
+            cu_seqlens_q=mask.cu_query,
+            max_seqlen_k=mask.key_count,
+            cu_seqlens_k=mask.cu_key,
+            softmax_scale=self.softmax_scale,
+            causal=False,
+            fa_version=3,
+            out=out,
+        )
+        if out is None:
+            output.zero_().index_copy_(0, query_index, result)
+        return True
+
     @torch._dynamo.disable
-    def forward(self, q, k, v, *, ranges=None, query_mask=None, key_mask=None, block_mask=None, block_masks=None):
+    def forward(
+        self, q, k, v, *, ranges=None, query_mask=None, key_mask=None, block_mask=None, block_masks=None, phase=None
+    ):
         if q.ndim != 4 or k.ndim != 4 or k.shape != v.shape or q.shape[0] != k.shape[0]:
             raise ValueError("Hy-Nomas attention requires matching BSND query/key/value tensors.")
         if (
@@ -197,7 +294,8 @@ class RangeAttention(nn.Module):
                 or (
                     has_tokens
                     and any(
-                        not isinstance(mask, BlockMask) or mask.shape[-2:] != (q.shape[1], k.shape[1])
+                        not isinstance(mask, (BlockMask, _PackedAttentionMask))
+                        or mask.shape[-2:] != (q.shape[1], k.shape[1])
                         for mask in block_masks
                     )
                 )
@@ -213,22 +311,31 @@ class RangeAttention(nn.Module):
                 query_mask=query_mask,
                 key_mask=key_mask,
             )
-        output = torch.empty_like(q)
+        output = torch.empty_like(
+            q, memory_format=torch.contiguous_format if self._flash_attn_varlen is not None else torch.preserve_format
+        )
         for batch, batch_mask in enumerate(block_masks):
-            if not q.shape[1] or not k.shape[1] or batch_mask is None:
+            if batch_mask is None:
                 output[batch].zero_()
-                continue
-            kernel = compiled_flex() if q.device.type == "cuda" else flex_attention
-            result = kernel(
-                q[batch].transpose(0, 1)[None],
-                k[batch].transpose(0, 1)[None],
-                v[batch].transpose(0, 1)[None],
-                block_mask=batch_mask,
-                scale=self.softmax_scale,
-                enable_gqa=q.shape[2] != k.shape[2],
-                kernel_options={"ROWS_GUARANTEED_SAFE": False, "BLOCKS_ARE_CONTIGUOUS": False},
-            )
-            output[batch].copy_(result[0].transpose(0, 1))
+                backend = "empty"
+            elif isinstance(batch_mask, _PackedAttentionMask):
+                executed = self._apply_fa3(q[batch], k[batch], v[batch], batch_mask, output[batch])
+                backend = "fa3" if executed else "empty"
+            else:
+                kernel = compiled_flex() if q.device.type == "cuda" else flex_attention
+                result = kernel(
+                    q[batch].transpose(0, 1)[None],
+                    k[batch].transpose(0, 1)[None],
+                    v[batch].transpose(0, 1)[None],
+                    block_mask=batch_mask,
+                    scale=self.softmax_scale,
+                    enable_gqa=q.shape[2] != k.shape[2],
+                    kernel_options={"ROWS_GUARANTEED_SAFE": False, "BLOCKS_ARE_CONTIGUOUS": False},
+                )
+                output[batch].copy_(result[0].transpose(0, 1))
+                backend = "flex"
+            if phase is not None:
+                self.backend_hits[phase][backend] += 1
         return output
 
 

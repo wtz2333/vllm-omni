@@ -163,10 +163,13 @@ def validate_config(config: OmniDiffusionConfig) -> None:
     allowed = {
         "text_encoder",
         "decoder_parallel_mode",
+        "dit_attention_backend",
         *(f"ar_{name}" for name in HyNomasARConfig.__dataclass_fields__),
     }
     if custom.keys() - allowed:
         raise ValueError(f"Unsupported Hy-Nomas custom_pipeline_args: {sorted(custom.keys() - allowed)}")
+    if (attention_backend := custom.get("dit_attention_backend", "flex")) not in ("flex", "fa3"):
+        raise ValueError(f"Unsupported Hy-Nomas dit_attention_backend: {attention_backend!r}")
     decoder_mode = custom.get("decoder_parallel_mode", "none")
     if decoder_mode not in ("none", "window"):
         raise ValueError("Hy-Nomas decoder_parallel_mode must be none or window.")
@@ -290,7 +293,12 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
             )
             for component, prefix in (("transformer", "transformer."), ("decoder", "vae."))
         ]
-        self.transformer = build_transformer(self.args, self.device, transformer_config)
+        self.transformer = build_transformer(
+            self.args,
+            self.device,
+            transformer_config,
+            attention_backend=(od_config.custom_pipeline_args or {}).get("dit_attention_backend", "flex"),
+        )
         self.text_encoder = (
             TextEncoder(
                 text_encoder_path=text_encoder,

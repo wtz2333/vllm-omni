@@ -13,7 +13,6 @@ import regex as re
 import torch
 from omegaconf import DictConfig
 from torch import nn
-from torch.nn.attention.flex_attention import BlockMask
 from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 from vllm.model_executor.models.utils import WeightsMapper
 
@@ -21,7 +20,7 @@ from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
 from vllm_omni.diffusion.attention.parallel.base import NoParallelAttention
 from vllm_omni.diffusion.attention.parallel.ulysses import UlyssesParallelAttention
 from vllm_omni.diffusion.distributed.parallel_state import get_sp_group
-from vllm_omni.diffusion.models.hy_nomas.attention import RangeAttention, action_ranges, assemble_kv
+from vllm_omni.diffusion.models.hy_nomas.attention import AttentionMask, RangeAttention, action_ranges, assemble_kv
 from vllm_omni.diffusion.models.hy_nomas.layers import (
     MLP,
     FinalLayer,
@@ -47,9 +46,15 @@ _DIT_NAMES = WeightsMapper(
 )
 
 
-def build_transformer(config: DictConfig, device: torch.device, model_config: dict) -> nn.Module:
+def build_transformer(
+    config: DictConfig, device: torch.device, model_config: dict, *, attention_backend: str = "flex"
+) -> nn.Module:
     transformer = HyNomasTransformer(
-        model_config, sp_size=config.parallelism.sp_size, device=device, dtype=torch.bfloat16
+        model_config,
+        sp_size=config.parallelism.sp_size,
+        device=device,
+        dtype=torch.bfloat16,
+        attention_backend=attention_backend,
     )
     return transformer.to(device=device, dtype=torch.bfloat16).eval().requires_grad_(False)
 
@@ -122,7 +127,7 @@ class MMDoubleStreamBlock(nn.Module):
         windows,
         tokens_per_frame,
         *,
-        block_masks: tuple[BlockMask | None, ...] | None = None,
+        block_masks: tuple[AttentionMask, ...] | None = None,
     ):
         img_mod, txt_mod = self.img_mod(vec), self.txt_mod(vec)
         qkv = []
@@ -192,10 +197,11 @@ class MMDoubleStreamBlock(nn.Module):
         k, v = assemble_kv(
             cache, layer_idx, k, v, history=history, media_tokens=image_tokens, cache_text=cache_txt, update=update
         )
+        phase = "kv_commit" if update else "denoise"
         attn_out = (
-            attention(q, k, v, block_masks=block_masks)
+            attention(q, k, v, block_masks=block_masks, phase=phase)
             if block_masks is not None
-            else attention(q, k, v, ranges=ranges, query_mask=current_mask, key_mask=key_mask)
+            else attention(q, k, v, ranges=ranges, query_mask=current_mask, key_mask=key_mask, phase=phase)
         )
         hidden = strategy.post_attention(attn_out, context)
         fmt = torch.contiguous_format  # Fresh storage prevents cross-break stride/offset guards.
@@ -281,7 +287,7 @@ class ActionModule(nn.Module):
 class HyNomasTransformer(nn.Module):
     _repeated_blocks: ClassVar[list[str]] = ["MMDoubleStreamBlock", "ActionModule"]
 
-    def __init__(self, model_config, *, sp_size=1, device=None, dtype=torch.bfloat16):
+    def __init__(self, model_config, *, sp_size=1, device=None, dtype=torch.bfloat16, attention_backend="flex"):
         super().__init__()
         self.config = SimpleNamespace(**model_config)
         self.in_channels, self.out_channels = self.config.in_channels, self.config.out_channels
@@ -329,7 +335,7 @@ class HyNomasTransformer(nn.Module):
             for _ in range(self.config.num_layers)
         )
         self.final_layer = FinalLayer(self.hidden_size, self.out_channels, **kwargs)
-        self.attention = RangeAttention(self.config.attention_head_dim**-0.5)
+        self.attention = RangeAttention(self.config.attention_head_dim**-0.5, backend=attention_backend)
         camera_dim = self.config.camera_attention_dim // self.config.camera_num_attention_heads
         self.camera_attention = RangeAttention(camera_dim**-0.5)
         self.action_modules = nn.ModuleList(

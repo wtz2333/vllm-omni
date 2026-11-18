@@ -42,6 +42,46 @@ def test_compiled_ranges_match_fp32_sdpa(dtype, kv_heads):
     assert torch.isfinite(actual).all()
 
 
+@hardware_test(res={"cuda": "H100"}, num_cards=1)
+@torch.no_grad()
+def test_fa3_joint_attention_preserves_visibility_and_falls_back_for_ranges():
+    from vllm.vllm_flash_attn.flash_attn_interface import fa_version_unsupported_reason
+
+    if (reason := fa_version_unsupported_reason(3)) is not None:
+        pytest.skip(reason)
+
+    generator = torch.Generator(device="cuda").manual_seed(43)
+    q = torch.randn(3, 19, 4, 128, device="cuda", dtype=torch.bfloat16, generator=generator)
+    k, v = [torch.randn(3, 23, 2, 128, device="cuda", dtype=torch.bfloat16, generator=generator) for _ in range(2)]
+    qm = torch.ones(3, 19, dtype=torch.bool, device="cuda")
+    km = torch.ones(3, 23, dtype=torch.bool, device="cuda")
+    qm[0, 16:], qm[1, 2], km[1, 5], km[2, :] = False, False, False, False
+    masks = {"query_mask": qm, "key_mask": km}
+    baseline = RangeAttention(128**-0.5)
+    candidate = RangeAttention(128**-0.5, backend="fa3")
+
+    plan = candidate.resolve_masks(19, 23, q.device, batch_size=3, **masks)
+    reused = candidate.resolve_masks(19, 23, q.device, batch_size=3, **masks)
+    assert all(first is second for first, second in zip(plan, reused, strict=True))
+    actual = candidate(q, k, v, block_masks=plan, phase="denoise")
+    expected = baseline(q, k, v, **masks)
+    torch.testing.assert_close(actual, expected, rtol=1e-2, atol=1e-2)
+    assert torch.count_nonzero(actual[~qm]) == 0
+    assert torch.count_nonzero(actual[2]) == 0
+    assert candidate.backend_hits["denoise"] == {"fa3": 2, "empty": 1}
+
+    qm[0, 0] = False
+    updated = candidate.resolve_masks(19, 23, q.device, batch_size=3, **masks)
+    assert updated[0] is not plan[0] and updated[1] is plan[1]
+    assert torch.count_nonzero(candidate(q, k, v, block_masks=updated)[0, 0]) == 0
+
+    ranges = [[(0, 10, 0, 13), (10, 19, 8, 23)]] * 3
+    actual = candidate(q, k, v, ranges=ranges, phase="kv_commit", **masks)
+    expected = baseline(q, k, v, ranges=ranges, **masks)
+    torch.testing.assert_close(actual, expected, rtol=0, atol=0)
+    assert candidate.backend_hits["kv_commit"] == {"flex": 3}
+
+
 @hardware_test(res={"cuda": "L4"}, num_cards=1)
 @torch.no_grad()
 def test_prebuilt_mask_preserves_static_kernel_numerics():
