@@ -1070,6 +1070,7 @@ async def omni_init_app_state(
             engine_client=engine_client,
             model_name=model_name,
             stage_configs=diffusion_stage_configs,
+            proxy_size=state.openai_serving_video.live_proxy_canvas(),
         )
 
         state.openai_serving_speech = OmniOpenAIServingSpeech.for_diffusion(
