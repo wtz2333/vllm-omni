@@ -168,7 +168,7 @@ def validate_config(config: OmniDiffusionConfig) -> None:
     }
     if custom.keys() - allowed:
         raise ValueError(f"Unsupported Hy-Nomas custom_pipeline_args: {sorted(custom.keys() - allowed)}")
-    if (attention_backend := custom.get("dit_attention_backend", "flex")) not in ("flex", "fa3"):
+    if (attention_backend := custom.get("dit_attention_backend", "flex")) not in ("flex", "fa3", "fa3_lse"):
         raise ValueError(f"Unsupported Hy-Nomas dit_attention_backend: {attention_backend!r}")
     decoder_mode = custom.get("decoder_parallel_mode", "none")
     if decoder_mode not in ("none", "window"):
@@ -217,6 +217,7 @@ class HyNomasSession:
 
 
 class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
+    dit_attention_backend: str = "flex"
     supports_step_execution: ClassVar[bool] = True
     supports_chunk_step_grouping: ClassVar[bool] = True
     # Generic warmup uses two steps and CFG=0, which the distilled checkpoint does not support.
@@ -233,14 +234,16 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
         self.device = get_local_device()
         if self.device.type != "cuda":
             raise ValueError("Hy-Nomas requires CUDA.")
-        self.decoder_parallel_mode = (od_config.custom_pipeline_args or {}).get("decoder_parallel_mode", "none")
-        self.initialize_ar(od_config.custom_pipeline_args or {})
+        custom = od_config.custom_pipeline_args or {}
+        self.decoder_parallel_mode = custom.get("decoder_parallel_mode", "none")
+        self.dit_attention_backend = custom.get("dit_attention_backend", "flex")
+        self.initialize_ar(custom)
         self.sp_size = od_config.parallel_config.ulysses_degree
         self.target_dtype = torch.bfloat16
         self._cpu_offload = False
         self._vae_offloaded = False
         root = Path(od_config.model)
-        text_encoder_override = (od_config.custom_pipeline_args or {}).get("text_encoder")
+        text_encoder_override = custom.get("text_encoder")
         if not root.is_dir():
             root = Path(
                 download_weights_from_hf_specific(
@@ -297,7 +300,7 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
             self.args,
             self.device,
             transformer_config,
-            attention_backend=(od_config.custom_pipeline_args or {}).get("dit_attention_backend", "flex"),
+            attention_backend=self.dit_attention_backend,
         )
         self.text_encoder = (
             TextEncoder(
@@ -783,8 +786,6 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
         if cache is not None:
             if cache.history_tokens != history:
                 raise RuntimeError("Hy-Nomas KV history and text visibility mask disagree.")
-            condition_tokens = state.prompt_embeds.shape[1] if commit and not first else 0
-            cache.prepare_layer_views(current_tokens, condition_tokens)
             views = None
         else:
             if session.offline_cache is None:
@@ -793,6 +794,8 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
                 {name: tensor[:, : history + current_tokens] for name, tensor in layer.items()}
                 for layer in session.offline_cache
             ]
+        offsets = state.extra["hy_nomas_intra_offsets"]
+        windows = state.extra["hy_nomas_intra_windows"]
         mask, mask_list = state.extra.get("hy_nomas_chunk_masks") or (None, None)
         if (
             mask is None
@@ -812,6 +815,23 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
                     mask[:, start:end] = False
             mask_list = [mask] * self.num_double_blocks
             state.extra["hy_nomas_chunk_masks"] = (mask, mask_list)
+            state.extra["hy_nomas_history_indices"] = None
+            if (
+                cache is not None
+                and history
+                and self.dit_attention_backend == "fa3_lse"
+                and not (first and offsets is not None and windows)
+            ):
+                visible_history = mask[0, :history].nonzero().flatten()
+                if visible_history.numel() < history:
+                    state.extra["hy_nomas_history_indices"] = visible_history
+        packed_history_tokens = None
+        if cache is not None:
+            history_indices = state.extra.get("hy_nomas_history_indices")
+            condition_tokens = state.prompt_embeds.shape[1] if commit and not first else 0
+            cache.prepare_layer_views(current_tokens, condition_tokens, history_indices=history_indices)
+            if history_indices is not None:
+                packed_history_tokens = history_indices.numel()
         if latents.shape[1] < self.in_channels:
             latents = torch.cat(
                 (
@@ -861,10 +881,11 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
                     cache_mask_list=mask_list,
                     camera_embedding=state.extra["hy_nomas_camera"],
                     camera_has_mask=state.extra["hy_nomas_camera_mask"],
-                    intra_seg_txt_offsets=state.extra["hy_nomas_intra_offsets"],
-                    intra_seg_vid_windows=state.extra["hy_nomas_intra_windows"],
+                    intra_seg_txt_offsets=offsets,
+                    intra_seg_vid_windows=windows,
                     camera_rope_time_offset=0,
                     kv_cache_state=cache,
+                    packed_history_tokens=packed_history_tokens,
                 )
             if commit:
                 if cache is not None:

@@ -421,12 +421,14 @@ class HyNomasTransformer(nn.Module):
             if bool(cache_txt or cand) == bool(cache_txt or update_cache):
                 self._lru_put(self._step_attention_plan_cache, self._make_step_attention_key(kw, cand), entry)
 
-    def _resolve_step_attention_plan(self, shape, img, text_mask, cache_masks, valid_len, update, cache_txt, act_args):
+    def _resolve_step_attention_plan(
+        self, shape, img, text_mask, cache_masks, valid_len, update, cache_txt, act_args, packed_history_tokens=None
+    ):
         batch, _, height, width = shape
         img_local, device = img.shape[1], img.device
         offsets, windows = act_args
         unique_masks = tuple({id(mask): mask for mask in cache_masks}.values())
-        kw = (shape, text_mask, unique_masks, valid_len, cache_txt, offsets, windows, device)
+        kw = ((shape, packed_history_tokens), text_mask, unique_masks, valid_len, cache_txt, offsets, windows, device)
         plan_key = self._make_step_attention_key(kw, update)
         entry = self._step_attention_plan_cache.get(plan_key)
         if entry is not None and self._snapshots_match(entry[2]):
@@ -438,12 +440,21 @@ class HyNomasTransformer(nn.Module):
             text_mask_bool = text_mask.bool()
             current_mask = torch.cat((image_mask, text_mask_bool), 1)
             first_hist = unique_masks[0][:, :valid_len]
-            hetero = (
-                len(unique_masks) > 1
-                and valid_len > 0
-                and any(not torch.equal(m[:, :valid_len], first_hist) for m in unique_masks[1:])
-            )
-            histories = [m[:, :valid_len] for m in unique_masks] if hetero else [first_hist]
+            if packed_history_tokens is not None:
+                if (
+                    len(unique_masks) != 1
+                    or not 0 <= packed_history_tokens < valid_len
+                    or (cache_txt and offsets is not None and windows)
+                ):
+                    raise ValueError("Hy-Nomas packed history requires a shared mask without action ranges.")
+                histories = [torch.ones((batch, packed_history_tokens), device=device, dtype=torch.bool)]
+            else:
+                hetero = (
+                    len(unique_masks) > 1
+                    and valid_len > 0
+                    and any(not torch.equal(m[:, :valid_len], first_hist) for m in unique_masks[1:])
+                )
+                histories = [m[:, :valid_len] for m in unique_masks] if hetero else [first_hist]
             resolved_list = []
             for history_mask in histories:
                 key_mask = torch.cat((history_mask, current_mask if cache_txt or update else image_mask), 1)
@@ -537,6 +548,7 @@ class HyNomasTransformer(nn.Module):
         intra_seg_vid_windows=None,
         camera_rope_time_offset=0,
         kv_cache_state=None,
+        packed_history_tokens=None,
     ):
         if camera_rope_time_offset != 0:
             raise ValueError("Hy-Nomas uses local camera RoPE.")
@@ -555,7 +567,15 @@ class HyNomasTransformer(nn.Module):
         txt = self.txt_in(text_states, timestep, text_mask)
         shape, act_args = (batch, frames, height, width), (intra_seg_txt_offsets, intra_seg_vid_windows)
         layer_block_masks = self._resolve_step_attention_plan(
-            shape, img, text_mask, cache_mask_list, cache_valid_len, update_cache, cache_txt, act_args
+            shape,
+            img,
+            text_mask,
+            cache_mask_list,
+            cache_valid_len,
+            update_cache,
+            cache_txt,
+            act_args,
+            packed_history_tokens,
         )
         cam_q = cam_k = cam_masks = None
         if camera_embedding is not None and len(self.action_modules) > 0:

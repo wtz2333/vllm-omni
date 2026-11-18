@@ -11,6 +11,7 @@ import numpy as np
 import torch
 from torch import nn
 from torch.nn.attention.flex_attention import BlockMask, flex_attention
+from vllm.v1.attention.ops.merge_attn_states import merge_attn_states
 
 from vllm_omni.experimental.ar_diffusion.kv_cache.segmented import ARDiffusionSegmentedKVState
 
@@ -105,7 +106,25 @@ class _PackedAttentionMask:
     cu_key: torch.Tensor
 
 
-AttentionMask = BlockMask | _PackedAttentionMask | None
+@dataclass(frozen=True)
+class _ActionAttentionPass:
+    key_index: slice | torch.Tensor
+    cu_query: torch.Tensor
+    cu_key: torch.Tensor
+    max_query: int
+    max_key: int
+
+
+@dataclass(frozen=True)
+class _ActionAttentionMask:
+    shape: tuple[int, int]
+    query_index: torch.Tensor
+    shared: _ActionAttentionPass
+    extra: _ActionAttentionPass
+    extra_queries: int
+
+
+AttentionMask = BlockMask | _PackedAttentionMask | _ActionAttentionMask | None
 
 
 def _visible_index(visibility: np.ndarray, device: torch.device) -> tuple[slice | torch.Tensor, int]:
@@ -137,22 +156,94 @@ def _select_tokens(tensor: torch.Tensor, index: slice | torch.Tensor) -> torch.T
     return tensor[index] if isinstance(index, slice) else tensor.index_select(0, index)
 
 
+def _pack_action_mask(
+    query_visible: np.ndarray,
+    key_visible: np.ndarray,
+    rectangles: Sequence[tuple[int, int, int, int]],
+    device: torch.device,
+) -> _ActionAttentionMask | None:
+    query_length, key_length = len(query_visible), len(key_visible)
+    by_query: dict[tuple[int, int], list[tuple[int, int]]] = {}
+    for qs, qe, ks, ke in rectangles:
+        if not (0 <= qs <= qe <= query_length and 0 <= ks <= ke <= key_length):
+            return None
+        if qs != qe and ks != ke:
+            by_query.setdefault((qs, qe), []).append((ks, ke))
+
+    groups = []
+    previous_query_end = 0
+    for (qs, qe), intervals in sorted(by_query.items()):
+        if qs < previous_query_end:
+            return None
+        previous_query_end = qe
+        observed_keys = np.zeros(key_length, dtype=bool)
+        previous_key_end = 0
+        for ks, ke in sorted(intervals):
+            if ks < previous_key_end:
+                return None
+            previous_key_end = ke
+            observed_keys[ks:ke] = key_visible[ks:ke]
+        query_indices = np.flatnonzero(query_visible[qs:qe]) + qs
+        if len(query_indices) and observed_keys.any():
+            groups.append((query_indices, observed_keys))
+    if not groups:
+        return None
+
+    # 两次 attention 的 key 集合必须互斥，LSE 合并才会保持原 softmax 分母。
+    common_keys = np.logical_and.reduce([keys for _, keys in groups])
+    shared_index, shared_count = _visible_index(common_keys, device)
+    if shared_count == 0:
+        return None
+    only_shared, action_queries, action_keys = [], [], []
+    for queries, keys in groups:
+        extra = np.flatnonzero(keys & ~common_keys)
+        if len(extra):
+            action_queries.append(queries)
+            action_keys.append(extra)
+        else:
+            only_shared.append(queries)
+    if not action_queries:
+        return None
+    ordered_queries = np.concatenate([*action_queries, *only_shared])
+
+    def prefix(lengths: list[int]) -> torch.Tensor:
+        return torch.from_numpy(np.cumsum([0, *lengths], dtype=np.int32)).to(device)
+
+    query_lengths = list(map(len, action_queries))
+    key_lengths = list(map(len, action_keys))
+    return _ActionAttentionMask(
+        (query_length, key_length),
+        torch.from_numpy(ordered_queries).to(device),
+        _ActionAttentionPass(
+            shared_index, prefix([len(ordered_queries)]), prefix([shared_count]), len(ordered_queries), shared_count
+        ),
+        _ActionAttentionPass(
+            torch.from_numpy(np.concatenate(action_keys)).to(device),
+            prefix(query_lengths),
+            prefix(key_lengths),
+            max(query_lengths),
+            max(key_lengths),
+        ),
+        sum(query_lengths),
+    )
+
+
 class RangeAttention(nn.Module):
     def __init__(self, softmax_scale: float, *, backend: str = "flex"):
         super().__init__()
         self.softmax_scale = softmax_scale
         self.backend = backend
-        self.masks: OrderedDict[tuple, BlockMask | _PackedAttentionMask] = OrderedDict()
+        self.masks: OrderedDict[tuple, BlockMask | _PackedAttentionMask | _ActionAttentionMask] = OrderedDict()
         self.backend_hits: dict[str, Counter[str]] = {"denoise": Counter(), "kv_commit": Counter()}
         self._flash_attn_varlen = None
-        if backend == "fa3":
+        if backend in ("fa3", "fa3_lse"):
             from vllm.vllm_flash_attn.flash_attn_interface import (
                 fa_version_unsupported_reason,
                 flash_attn_varlen_func,
             )
 
             if (reason := fa_version_unsupported_reason(3)) is not None:
-                raise ValueError(f"Hy-Nomas dit_attention_backend='fa3' is unavailable: {reason}")
+                raise ValueError(f"Hy-Nomas dit_attention_backend={backend!r} is unavailable: {reason}")
             self._flash_attn_varlen = flash_attn_varlen_func
         elif backend != "flex":
             raise ValueError(f"Unsupported Hy-Nomas dit_attention_backend: {backend!r}")
@@ -193,9 +284,14 @@ class RangeAttention(nn.Module):
             rectangles = [(0, q_length, 0, k_length)] if ranges is None else ranges[batch]
             cache_key = (q_length, k_length, device_str, pack, tuple(rectangles), qr.tobytes(), kr.tobytes())
             if cache_key not in self.masks:
+                plan: _PackedAttentionMask | _ActionAttentionMask | None = None
+                if pack:
+                    plan = _pack_mask(qr, kr, target_device)
+                elif self.backend == "fa3_lse":
+                    plan = _pack_action_mask(qr, kr, rectangles, target_device)
                 self.masks[cache_key] = (
-                    _pack_mask(qr, kr, target_device)
-                    if pack
+                    plan
+                    if plan is not None
                     else build_range_mask(q_length, k_length, rectangles, target_device, qr, kr)
                 )
                 while len(self.masks) > 32:
@@ -234,6 +330,38 @@ class RangeAttention(nn.Module):
         if out is None:
             output.zero_().index_copy_(0, query_index, result)
         return True
+
+    def _apply_action_fa3(self, q, k, v, mask: _ActionAttentionMask, output: torch.Tensor) -> None:
+        flash_attn = self._flash_attn_varlen
+        if flash_attn is None or q.device.type != "cuda":
+            raise ValueError("Hy-Nomas action attention requires the CUDA FA3 backend.")
+
+        def attend(queries: torch.Tensor, part: _ActionAttentionPass):
+            return flash_attn(
+                queries,
+                _select_tokens(k, part.key_index),
+                _select_tokens(v, part.key_index),
+                max_seqlen_q=part.max_query,
+                cu_seqlens_q=part.cu_query,
+                max_seqlen_k=part.max_key,
+                cu_seqlens_k=part.cu_key,
+                causal=False,
+                softmax_scale=self.softmax_scale,
+                fa_version=3,
+                return_softmax_lse=True,
+            )
+
+        packed_q = q.index_select(0, mask.query_index)
+        shared_out, shared_lse = attend(packed_q, mask.shared)
+        active = mask.extra_queries
+        action_out, action_lse = attend(packed_q[:active], mask.extra)
+        combined = torch.empty_like(action_out)
+        merge_attn_states(
+            combined, shared_out[:active], shared_lse[:, :active].contiguous(), action_out, action_lse.contiguous()
+        )
+        output.zero_()
+        output.index_copy_(0, mask.query_index[:active], combined)
+        output.index_copy_(0, mask.query_index[active:], shared_out[active:])
 
     @torch._dynamo.disable
     def forward(
@@ -294,7 +422,7 @@ class RangeAttention(nn.Module):
                 or (
                     has_tokens
                     and any(
-                        not isinstance(mask, (BlockMask, _PackedAttentionMask))
+                        not isinstance(mask, (BlockMask, _PackedAttentionMask, _ActionAttentionMask))
                         or mask.shape[-2:] != (q.shape[1], k.shape[1])
                         for mask in block_masks
                     )
@@ -321,6 +449,9 @@ class RangeAttention(nn.Module):
             elif isinstance(batch_mask, _PackedAttentionMask):
                 executed = self._apply_fa3(q[batch], k[batch], v[batch], batch_mask, output[batch])
                 backend = "fa3" if executed else "empty"
+            elif isinstance(batch_mask, _ActionAttentionMask):
+                self._apply_action_fa3(q[batch], k[batch], v[batch], batch_mask, output[batch])
+                backend = "fa3_lse"
             else:
                 kernel = compiled_flex() if q.device.type == "cuda" else flex_attention
                 result = kernel(
