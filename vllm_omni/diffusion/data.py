@@ -1738,6 +1738,15 @@ class OmniDiffusionConfig:
             self.set_tf_model_config(TransformerConfig())
             return
 
+        from vllm_omni.diffusion.models.invoker_render.assets import PIPELINE, is_invoker_render_bundle
+
+        if self.model_class_name in (None, PIPELINE) and is_invoker_render_bundle(self.model):
+            self.model_class_name = PIPELINE
+            if not self._load_component_transformer_config():
+                raise ValueError("Invoker-Render bundle requires transformer/config.json")
+            self.update_multimodal_support()
+            return
+
         try:
             config_dict = get_diffusion_model_index(
                 self.model,
@@ -2025,7 +2034,7 @@ class DiffusionOutput:
     # Streaming info (the defaults should make sense for non-streaming mode)
     finished: bool = True
     chunk_index: int = 0
-    total_chunks: int = 1
+    total_chunks: int | None = 1
     started_event_ids: list[str] = field(default_factory=list)
     active_event_ids: list[str] = field(default_factory=list)
     completed_event_ids: list[str] = field(default_factory=list)

@@ -285,6 +285,21 @@ class OmniOpenAIServingVideo:
         return capability is True or any(item.supports_mixed_reference_inputs for item in metadata)
 
     @property
+    def supports_proxy_video_input(self) -> bool:
+        _, metadata = self._resolve_diffusion_metadata()
+        return any(item.supports_proxy_video_input for item in metadata)
+
+    def live_proxy_canvas(self) -> tuple[int, int] | None:
+        od_config = self._resolve_diffusion_od_config()
+        if od_config is None or not od_config.streaming_output or not self.supports_proxy_video_input:
+            return None
+        from vllm_omni.diffusion.models.invoker_render.assets import InvokerRenderAssets
+
+        if od_config.model is None:
+            raise RuntimeError("Missing prepared Invoker-Render bundle for streaming")
+        return InvokerRenderAssets.read(od_config.model).proxy_size
+
+    @property
     def supports_latent_mask_editing(self) -> bool:
         """Return whether the configured diffusion model accepts latent edits."""
         _, metadata = self._resolve_diffusion_metadata()
@@ -399,6 +414,10 @@ class OmniOpenAIServingVideo:
         provided_fields = request.model_fields_set
         fps_provided = self._request_fps_provided(request)
         num_frames_provided = self._request_num_frames_provided(request)
+        if self.supports_proxy_video_input and num_frames_provided and request.resolve_video_params().num_frames == 1:
+            raise HTTPException(
+                400, detail="Proxy video rendering requires the source frame count, at least 39 frames."
+            )
         video_defaults = self._resolve_video_generation_defaults(request)
         if video_defaults is None:
             vp = request.resolve_video_params()
