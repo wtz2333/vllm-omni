@@ -189,7 +189,7 @@ def _pack_action_mask(
     if not groups:
         return None
 
-    # 两次 attention 的 key 集合必须互斥，LSE 合并才会保持原 softmax 分母。
+    # LSE merging preserves the softmax denominator for disjoint key sets.
     common_keys = np.logical_and.reduce([keys for _, keys in groups])
     shared_index, shared_count = _visible_index(common_keys, device)
     if shared_count == 0:
@@ -276,7 +276,7 @@ class RangeAttention(nn.Module):
             return (None,) * batch_size
         resolved: list[AttentionMask] = []
         device_str = str(target_device)
-        # 只有无区间约束时，所有有效 query 才能共用同一组有效 key。
+        # Token-only masks give every valid query the same key set.
         pack = self._flash_attn_varlen is not None and ranges is None
         for batch in range(batch_size):
             qr = np.ones(q_length, dtype=bool) if query_mask is None else query_mask[batch].detach().cpu().numpy()

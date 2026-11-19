@@ -796,7 +796,7 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
             ]
         offsets = state.extra["hy_nomas_intra_offsets"]
         windows = state.extra["hy_nomas_intra_windows"]
-        mask, mask_list = state.extra.get("hy_nomas_chunk_masks") or (None, None)
+        mask, mask_list, history_indices = state.extra.get("hy_nomas_chunk_masks") or (None, None, None)
         if (
             mask is None
             or mask_list is None
@@ -814,8 +814,7 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
                 if segment != state.extra["hy_nomas_segment_id"]:
                     mask[:, start:end] = False
             mask_list = [mask] * self.num_double_blocks
-            state.extra["hy_nomas_chunk_masks"] = (mask, mask_list)
-            state.extra["hy_nomas_history_indices"] = None
+            history_indices = None
             if (
                 cache is not None
                 and history
@@ -824,10 +823,10 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
             ):
                 visible_history = mask[0, :history].nonzero().flatten()
                 if visible_history.numel() < history:
-                    state.extra["hy_nomas_history_indices"] = visible_history
+                    history_indices = visible_history
+            state.extra["hy_nomas_chunk_masks"] = (mask, mask_list, history_indices)
         packed_history_tokens = None
         if cache is not None:
-            history_indices = state.extra.get("hy_nomas_history_indices")
             condition_tokens = state.prompt_embeds.shape[1] if commit and not first else 0
             cache.prepare_layer_views(current_tokens, condition_tokens, history_indices=history_indices)
             if history_indices is not None:

@@ -130,7 +130,7 @@ class ARDiffusionSegmentedKVState:
         needed = history_rows + media_tokens + condition_tokens
         self.cache.ensure_segmented_staging(self.kv_branch, needed)
         staging = self._staging()
-        # 同一块的多步前向复用一次生成的有效历史索引，索引在这段时间内保持不变。
+        # Staging reuse relies on immutable history indices throughout the chunk.
         if (
             staging.owner is not self
             or staging.revision != self._revision
