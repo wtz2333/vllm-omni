@@ -163,6 +163,7 @@ def validate_config(config: OmniDiffusionConfig) -> None:
     allowed = {
         "text_encoder",
         "decoder_parallel_mode",
+        "decoder_reference_math",
         *(f"ar_{name}" for name in HyNomasARConfig.__dataclass_fields__),
     }
     if custom.keys() - allowed:
@@ -172,6 +173,8 @@ def validate_config(config: OmniDiffusionConfig) -> None:
         raise ValueError("Hy-Nomas decoder_parallel_mode must be none or window.")
     if decoder_mode == "window" and parallel.ulysses_degree <= 1:
         raise ValueError("Hy-Nomas window decoder parallelism requires more than one Ulysses rank.")
+    if type(custom.get("decoder_reference_math", False)) is not bool:
+        raise ValueError("Hy-Nomas decoder_reference_math must be a boolean.")
     HyNomasARConfig.from_args(custom)
     if config.step_execution and not config.streaming_output:
         raise ValueError("Hy-Nomas step execution requires streaming_output=true.")
@@ -230,14 +233,15 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
         self.device = get_local_device()
         if self.device.type != "cuda":
             raise ValueError("Hy-Nomas requires CUDA.")
-        self.decoder_parallel_mode = (od_config.custom_pipeline_args or {}).get("decoder_parallel_mode", "none")
-        self.initialize_ar(od_config.custom_pipeline_args or {})
+        custom = od_config.custom_pipeline_args or {}
+        self.decoder_parallel_mode = custom.get("decoder_parallel_mode", "none")
+        self.initialize_ar(custom)
         self.sp_size = od_config.parallel_config.ulysses_degree
         self.target_dtype = torch.bfloat16
         self._cpu_offload = False
         self._vae_offloaded = False
         root = Path(od_config.model)
-        text_encoder_override = (od_config.custom_pipeline_args or {}).get("text_encoder")
+        text_encoder_override = custom.get("text_encoder")
         if not root.is_dir():
             root = Path(
                 download_weights_from_hf_specific(
@@ -300,7 +304,9 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
             .eval()
             .requires_grad_(False)
         )
-        self.vae = build_decoder(decoder_config, self.device)
+        self.vae = build_decoder(
+            {**decoder_config, "reference_math": custom.get("decoder_reference_math", False)}, self.device
+        )
         # Error propagation must not allocate device memory after an OOM.
         self._sp_error_status = (
             torch.empty(1, dtype=torch.int32, device=next(self.vae.parameters()).device) if self.sp_size > 1 else None
@@ -1039,8 +1045,12 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
                             pixels = torch.cat((pixels, tail), 2) if pixels.numel() else tail
             if pixels.numel():
                 pixels = (pixels * 0.5 + 0.5).clamp(0, 1)
-                frames = pixels[0].permute(1, 2, 3, 0).float().mul(255).round().to(torch.uint8).contiguous()
-                video = self._to_host(frames)
+                frames = pixels[0].permute(1, 2, 3, 0)
+                if self.vae.reference_math:
+                    frames = (frames * 255).clamp(0, 255).to(torch.uint8)
+                else:
+                    frames = frames.float().mul(255).round().to(torch.uint8)
+                video = self._to_host(frames.contiguous())
             else:
                 video = np.empty((0, session.height, session.width, 3), dtype=np.uint8)
             if self.decoder_parallel_mode == "window":

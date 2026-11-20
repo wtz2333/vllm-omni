@@ -421,8 +421,9 @@ def test_negative_prompt_requires_string(negative_prompt):
         normalize_request({"prompt": "A forest", "negative_prompt": negative_prompt}, OmniDiffusionSamplingParams())
 
 
-def test_decode_chunk_matches_legacy_quantization():
-    """Decoded latents must reach the encoder as HWC uint8 the legacy formula produced."""
+@pytest.mark.parametrize(("reference_math", "midpoint"), [(False, 128), (True, 127)])
+def test_decode_chunk_applies_requested_quantization(reference_math, midpoint):
+    """The reference export truncates instead of rounding the display values."""
     from contextlib import nullcontext
 
     pixels = torch.tensor([-1.4, -0.2, 0.0, 0.6], dtype=torch.float32).reshape(1, 1, 2, 1, 2)
@@ -440,6 +441,7 @@ def test_decode_chunk_matches_legacy_quantization():
     session = SimpleNamespace(decoder=Decoder(), height=1, width=2)
     pipeline = object.__new__(HyNomasPipeline)
     pipeline.vae = SimpleNamespace(
+        reference_math=reference_math,
         config=SimpleNamespace(scaling_factor=1.0, shift_factor=None),
         parameters=lambda: iter([torch.zeros(1, dtype=torch.float32)]),
     )
@@ -450,8 +452,7 @@ def test_decode_chunk_matches_legacy_quantization():
 
     video = pipeline._decode_chunk(session, torch.zeros(1), pixel_frames=2, finish=False)
 
-    # (v * 0.5 + 0.5) -> clamp -> * 255 -> round-half-even -> uint8, laid out as HWC.
-    expected = np.array([[[[0], [102]]], [[[128], [204]]]], dtype=np.uint8)
+    expected = np.array([[[[0], [102]]], [[[midpoint], [204]]]], dtype=np.uint8)
     assert video.dtype == np.uint8
     assert video.shape == (2, 1, 2, 1)
     assert video.flags["C_CONTIGUOUS"]

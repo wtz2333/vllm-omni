@@ -11,14 +11,60 @@ keep N-document packed boundaries (FlashAttention on CUDA/ROCm/MUSA) qualify;
 others keep the per-tile path.
 """
 
+import math
 from collections.abc import Sequence
 from dataclasses import dataclass
+from functools import lru_cache
 
 import torch
+from torch.nn import functional as F
+from torch.nn.attention.flex_attention import BlockMask, create_block_mask, flex_attention
 
 from vllm_omni.diffusion.attention.backends.abstract import AttentionMetadata
+from vllm_omni.diffusion.models.hy_nomas.attention import compiled_flex
 
 Neighborhoods = Sequence[tuple[tuple[int, int], Sequence[tuple[int, int]]]]
+
+
+@lru_cache(maxsize=8)
+def reference_local_layout(grid, tile, device):
+    """Match the reference's tile order and sparse FlexAttention mask."""
+    frames, height, width = grid
+    tiles_h, tiles_w = math.ceil(height / tile), math.ceil(width / tile)
+    if tiles_h <= 3 and tiles_w <= 3:
+        return None
+    t, h, w = (
+        axis.flatten() for axis in torch.meshgrid(*(torch.arange(size, device=device) for size in grid), indexing="ij")
+    )
+    tile_h, tile_w = h // tile, w // tile
+    order = (((tile_h * tiles_w + tile_w) * frames + t) * tile + h % tile) * tile + w % tile
+    permutation = torch.argsort(order)
+    tile_h, tile_w = tile_h[permutation], tile_w[permutation]
+    center_h = tile_h.clamp(1, max(tiles_h - 2, 1))
+    center_w = tile_w.clamp(1, max(tiles_w - 2, 1))
+
+    def mask_mod(batch, head, query, key):
+        return ((center_h[query] - tile_h[key]).abs() <= 1) & ((center_w[query] - tile_w[key]).abs() <= 1)
+
+    count = frames * height * width
+    block_mask = create_block_mask(mask_mod, None, None, count, count, device=device, _compile=device.type == "cuda")
+    return permutation, torch.argsort(permutation), block_mask
+
+
+def reference_attention(query, key, value, block_mask: BlockMask | None):
+    if block_mask is None:
+        repeat = query.shape[2] // key.shape[2]
+        result = F.scaled_dot_product_attention(
+            query.transpose(1, 2),
+            key.repeat_interleave(repeat, dim=2).transpose(1, 2),
+            value.repeat_interleave(repeat, dim=2).transpose(1, 2),
+        )
+    else:
+        attention = compiled_flex(dynamic=False) if query.device.type == "cuda" else flex_attention
+        result = attention(
+            query.transpose(1, 2), key.transpose(1, 2), value.transpose(1, 2), block_mask=block_mask, enable_gqa=True
+        )
+    return result.transpose(1, 2)
 
 
 @dataclass(frozen=True)

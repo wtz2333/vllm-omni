@@ -142,6 +142,19 @@ def test_native_full_decode_matches_reference(steps, tile):
 
 
 @torch.no_grad()
+def test_reference_math_matches_upstream_bfloat16_dense_window():
+    original, native = reference_pair(reference_math=True)
+    original.to(torch.bfloat16)
+    native.to(torch.bfloat16)
+    generator = torch.Generator().manual_seed(42)
+    latent = torch.randn(1, 32, 3, 1, 1, dtype=torch.bfloat16, generator=generator)
+    noisy_pixels = torch.randn(1, 3, 12, 32, 32, dtype=torch.bfloat16, generator=generator)
+    torch.testing.assert_close(
+        native.decoder(latent, noisy_pixels), original.decoder(latent, noisy_pixels), rtol=0, atol=0
+    )
+
+
+@torch.no_grad()
 def test_native_stream_matches_reference_at_every_push():
     chunks = (1, 3, 1)
     original, native = reference_pair()
