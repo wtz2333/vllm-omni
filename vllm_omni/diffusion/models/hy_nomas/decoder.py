@@ -36,11 +36,7 @@ from vllm.model_executor.model_loader.weight_utils import default_weight_loader
 
 from vllm_omni.diffusion.attention.layer import Attention
 from vllm_omni.diffusion.layers.activation import SiluAndMul
-from vllm_omni.diffusion.models.hy_nomas.decoder_attention import (
-    packed_local_attention,
-    reference_attention,
-    reference_local_layout,
-)
+from vllm_omni.diffusion.models.hy_nomas.decoder_attention import packed_local_attention
 from vllm_omni.diffusion.models.hy_nomas.decoder_kernels import apply_mrope, split_norm_rope
 
 # Ported from jiaxiangc/diffusers at 12722ef11acf8e335f96cfd4faea17de78cd8909.
@@ -181,7 +177,7 @@ def local_attention_layout(grid, tile, device):
 
 
 class PixelUMMRMSNorm(nn.Module):
-    """Qwen3 RMSNorm: normalize in FP32, cast back to the input dtype, then scale.
+    """Qwen3 RMSNorm for the split Q/K halves: normalize in fp32, cast back to the input dtype, then scale.
 
     Q/K enter in FP32 and stay FP32 through RoPE, which vLLM's RMSNorm (it
     rounds to the weight dtype) cannot express.
@@ -205,9 +201,9 @@ def _norm_rope(part, cos, sin, norm_t, norm_hw, sections, dtype):
     return apply_mrope(normalized, cos, sin, sections).to(dtype)
 
 
-def prepare_qk(tensor, cos, sin, norm_t, norm_hw, sections, dtype, *, use_fused=True):
+def prepare_qk(tensor, cos, sin, norm_t, norm_hw, sections, dtype):
     """Split FP32 Q/K norm and MRoPE for ``[B, N, heads, D]``, rounded once to ``dtype``."""
-    if use_fused and dtype == tensor.dtype:
+    if dtype == tensor.dtype:
         fused = split_norm_rope(tensor, cos, sin, norm_t.weight, norm_hw.weight, norm_t.eps)
         if fused is not None:
             return fused
@@ -226,10 +222,9 @@ def prepare_qk(tensor, cos, sin, norm_t, norm_hw, sections, dtype, *, use_fused=
 
 
 class PixelUMMAttention(nn.Module):
-    def __init__(self, arch: PixelUMMArchitecture, prefix: str = "", *, reference_math: bool = False):
+    def __init__(self, arch: PixelUMMArchitecture, prefix: str = ""):
         super().__init__()
         self.arch = arch
-        self.reference_math = reference_math
         hidden, dim = arch.hidden_size, arch.head_dim
         # Qwen3 layout: one stacked QKV projection, heads sharded over tensor-parallel ranks.
         tp_size = get_tensor_model_parallel_world_size()
@@ -243,19 +238,15 @@ class PixelUMMAttention(nn.Module):
         self.q_norm_hw = PixelUMMRMSNorm(dim // 2, arch.rms_norm_eps)
         self.k_norm_t = PixelUMMRMSNorm(dim // 2, arch.rms_norm_eps)
         self.k_norm_hw = PixelUMMRMSNorm(dim // 2, arch.rms_norm_eps)
-        self.attention = (
-            None
-            if reference_math
-            else Attention(
-                num_heads=self.num_heads,
-                num_kv_heads=self.num_kv_heads,
-                head_size=dim,
-                softmax_scale=dim**-0.5,
-                causal=False,
-                role="hy_nomas.decoder",
-                role_category="self",
-                skip_sequence_parallel=True,
-            )
+        self.attention = Attention(
+            num_heads=self.num_heads,
+            num_kv_heads=self.num_kv_heads,
+            head_size=dim,
+            softmax_scale=dim**-0.5,
+            causal=False,
+            role="hy_nomas.decoder",
+            role_category="self",
+            skip_sequence_parallel=True,
         )
 
     def forward(self, hidden_states, cos, sin, neighborhoods=None, packed=None) -> torch.Tensor:
@@ -270,17 +261,11 @@ class PixelUMMAttention(nn.Module):
         key = key.view(batch, count, self.num_kv_heads, dim)
         value = value.view(batch, count, self.num_kv_heads, dim)
         sections = self.arch.rope_sections
-        query = prepare_qk(
-            query, cos, sin, self.q_norm_t, self.q_norm_hw, sections, value.dtype, use_fused=not self.reference_math
-        )
-        key = prepare_qk(
-            key, cos, sin, self.k_norm_t, self.k_norm_hw, sections, value.dtype, use_fused=not self.reference_math
-        )
+        query = prepare_qk(query, cos, sin, self.q_norm_t, self.q_norm_hw, sections, value.dtype)
+        key = prepare_qk(key, cos, sin, self.k_norm_t, self.k_norm_hw, sections, value.dtype)
         # Keep K/V compressed through neighborhood gathering. The shared backend
         # selects fused GQA where supported and owns the equal-head fallback.
-        if self.reference_math:
-            output = reference_attention(query, key, value, packed)
-        elif packed is not None:
+        if packed is not None:
             # One varlen call reads every tile's neighborhood (decoder_attention.py).
             output = packed(self.attention, query, key, value)
         elif neighborhoods is None:
@@ -299,9 +284,8 @@ class PixelUMMAttention(nn.Module):
 class PixelUMMMLP(nn.Module):
     """Qwen3 MLP: one stacked gate/up projection, then the shared SiLU*mul kernel."""
 
-    def __init__(self, arch: PixelUMMArchitecture, prefix: str = "", *, reference_math: bool = False):
+    def __init__(self, arch: PixelUMMArchitecture, prefix: str = ""):
         super().__init__()
-        self.reference_math = reference_math
         self.gate_up_proj = MergedColumnParallelLinear(
             arch.hidden_size, [arch.intermediate_size] * 2, bias=False, prefix=f"{prefix}.gate_up_proj"
         )
@@ -312,19 +296,17 @@ class PixelUMMMLP(nn.Module):
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         gate_up, _ = self.gate_up_proj(x)
-        activated = self.act_fn.forward_native(gate_up) if self.reference_math else self.act_fn(gate_up)
-        x, _ = self.down_proj(activated)
+        x, _ = self.down_proj(self.act_fn(gate_up))
         return x
 
 
 class PixelUMMBlock(nn.Module):
-    def __init__(self, arch: PixelUMMArchitecture, prefix: str = "", *, reference_math: bool = False):
+    def __init__(self, arch: PixelUMMArchitecture, prefix: str = ""):
         super().__init__()
-        norm = PixelUMMRMSNorm if reference_math else RMSNorm
-        self.input_norm = norm(arch.hidden_size, eps=arch.rms_norm_eps)
-        self.attn = PixelUMMAttention(arch, prefix=f"{prefix}.attn", reference_math=reference_math)
-        self.post_attn_norm = norm(arch.hidden_size, eps=arch.rms_norm_eps)
-        self.mlp = PixelUMMMLP(arch, prefix=f"{prefix}.mlp", reference_math=reference_math)
+        self.input_norm = RMSNorm(arch.hidden_size, eps=arch.rms_norm_eps)
+        self.attn = PixelUMMAttention(arch, prefix=f"{prefix}.attn")
+        self.post_attn_norm = RMSNorm(arch.hidden_size, eps=arch.rms_norm_eps)
+        self.mlp = PixelUMMMLP(arch, prefix=f"{prefix}.mlp")
 
     def forward(
         self, x: torch.Tensor, cos: torch.Tensor, sin: torch.Tensor, neighborhoods=None, packed=None
@@ -336,9 +318,9 @@ class PixelUMMBlock(nn.Module):
 class PixelUMMHead(nn.Module):
     """Normalize hidden states and project each tubelet to RGB pixels."""
 
-    def __init__(self, hidden: int, prefix: str = "", *, reference_math: bool = False):
+    def __init__(self, hidden: int, prefix: str = ""):
         super().__init__()
-        self.norm = nn.RMSNorm(hidden, eps=1e-6) if reference_math else RMSNorm(hidden, eps=1e-6)
+        self.norm = RMSNorm(hidden, eps=1e-6)
         self.linear = ReplicatedLinear(hidden, TUBE_DIM, bias=True, prefix=f"{prefix}.linear")
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -349,19 +331,11 @@ class PixelUMMHead(nn.Module):
 class PixelUMMDecoderModel(nn.Module):
     """`forward(latent [B,32,L,h,w], xt [B,3,4L,32h,32w]) -> x0 prediction`."""
 
-    def __init__(
-        self,
-        arch: PixelUMMArchitecture,
-        *,
-        local_attention_tile: int = 0,
-        prefix: str = "decoder",
-        reference_math: bool = False,
-    ):
+    def __init__(self, arch: PixelUMMArchitecture, *, local_attention_tile: int = 0, prefix: str = "decoder"):
         super().__init__()
         if local_attention_tile < 0:
             raise ValueError(f"local_attention_tile must be >= 0 tokens, got {local_attention_tile}")
         self.arch = arch
-        self.reference_math = reference_math
         self.local_attention_tile = int(local_attention_tile)
         hidden = arch.hidden_size
         self.embed = ReplicatedLinear(TUBE_DIM, hidden, bias=True, prefix=f"{prefix}.embed")
@@ -369,12 +343,10 @@ class PixelUMMDecoderModel(nn.Module):
             LATENT_CHANNELS, LATENT_TOKEN_GRID**2 * hidden, bias=True, prefix=f"{prefix}.cond_proj"
         )
         self.layers = nn.ModuleList(
-            PixelUMMBlock(arch, prefix=f"{prefix}.layers.{index}", reference_math=reference_math)
-            for index in range(arch.num_layers)
+            PixelUMMBlock(arch, prefix=f"{prefix}.layers.{index}") for index in range(arch.num_layers)
         )
-        norm = PixelUMMRMSNorm if reference_math else RMSNorm
-        self.final_norm = norm(hidden, eps=arch.rms_norm_eps)
-        self.head = PixelUMMHead(hidden, prefix=f"{prefix}.head", reference_math=reference_math)
+        self.final_norm = RMSNorm(hidden, eps=arch.rms_norm_eps)
+        self.head = PixelUMMHead(hidden, prefix=f"{prefix}.head")
 
     def forward(self, latent: torch.Tensor, xt: torch.Tensor) -> torch.Tensor:
         if latent.ndim != 5 or latent.shape[1] != LATENT_CHANNELS:
@@ -400,8 +372,7 @@ class PixelUMMDecoderModel(nn.Module):
             cos, sin = mrope_tables(self.arch, grid, tokens.device)
             layout = None
             if self.local_attention_tile:
-                layout_fn = reference_local_layout if self.reference_math else local_attention_layout
-                layout = layout_fn(grid, self.local_attention_tile, tokens.device)
+                layout = local_attention_layout(grid, self.local_attention_tile, tokens.device)
             neighborhoods = None
             packed = None
             if layout is not None:
@@ -410,11 +381,7 @@ class PixelUMMDecoderModel(nn.Module):
                 cos = cos[:, perm]
                 sin = sin[:, perm]
                 # Every layer's attention shares one backend and one packed plan.
-                packed = (
-                    neighborhoods
-                    if self.reference_math
-                    else packed_local_attention(self.layers[0].attn.attention, neighborhoods, tokens)
-                )
+                packed = packed_local_attention(self.layers[0].attn.attention, neighborhoods, tokens)
             for layer in self.layers:
                 tokens = layer(tokens, cos, sin, neighborhoods, packed)
             tokens = self.final_norm(tokens)
@@ -572,8 +539,6 @@ class PixelUMMDecoder(nn.Module):
             Overlap between spatial decode tiles, in pixels.
         tail_hold_latents (`int`, defaults to 1):
             Number of tail latents withheld by preview consumers when a later segment will correct the tail.
-        reference_math (`bool`, defaults to False):
-            Use the reference BF16 operation order and attention layout.
     """
 
     _no_split_modules = ["PixelUMMBlock"]
@@ -606,7 +571,6 @@ class PixelUMMDecoder(nn.Module):
         decoder_tile_pixels: int = 0,
         decoder_tile_overlap_pixels: int = 64,
         tail_hold_latents: int = 1,
-        reference_math: bool = False,
     ):
         super().__init__()
         if local_attention_tile_pixels < 0 or local_attention_tile_pixels % 16:
@@ -642,10 +606,7 @@ class PixelUMMDecoder(nn.Module):
             rope_theta_t,
             rope_theta_hw,
         )
-        self.reference_math = reference_math
-        self.decoder = PixelUMMDecoderModel(
-            arch, local_attention_tile=local_attention_tile_pixels // 16, reference_math=reference_math
-        )
+        self.decoder = PixelUMMDecoderModel(arch, local_attention_tile=local_attention_tile_pixels // 16)
         self.temporal_window_latents = temporal_window_latents
         self.temporal_overlap_latents = temporal_overlap_latents
         self.tail_hold_latents = tail_hold_latents

@@ -275,11 +275,6 @@ Requests must fit the configured limits; increasing capacity requires more memor
 Keep `ar_max_latent_frames` fixed when comparing seeds because it determines the
 noise timeline.
 
-For BF16 PixelUMM comparisons at identical decoder latents, set
-`decoder_reference_math: true` in `custom_pipeline_args`. This uses the
-reference operation order and local attention layout. The streaming output
-also uses the reference uint8 truncation.
-
 ### Bounded recent history
 
 Use `vllm_omni/deploy/hy_nomas_ar_recent.yaml` for explicit `recent` history.
