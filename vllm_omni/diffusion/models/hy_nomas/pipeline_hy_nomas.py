@@ -1039,7 +1039,8 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
                             pixels = torch.cat((pixels, tail), 2) if pixels.numel() else tail
             if pixels.numel():
                 pixels = (pixels * 0.5 + 0.5).clamp(0, 1)
-                frames = pixels[0].permute(1, 2, 3, 0).float().mul(255).round().to(torch.uint8).contiguous()
+                # Match the reference's uint8 truncation.
+                frames = pixels[0].permute(1, 2, 3, 0).mul(255).to(torch.uint8).contiguous()
                 video = self._to_host(frames)
             else:
                 video = np.empty((0, session.height, session.width, 3), dtype=np.uint8)
