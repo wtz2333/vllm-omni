@@ -1394,7 +1394,7 @@ def test_action_path_requires_a_trusted_root_for_every_request() -> None:
         (_request(sampling=_SamplingParams(height=15)), "height.*divisible"),
         (_request(sampling=_SamplingParams(width=15)), "width.*divisible"),
         (_request(sampling=_SamplingParams(height=None, width=16)), "height and width.*both"),
-        (_request(sampling=_SamplingParams(num_frames=13)), "num_frames.*three-frame"),
+        (_request(sampling=_SamplingParams(num_frames=13)), "num_frames.*block_frames=3"),
     ],
 )
 def test_request_validation_rejects_unsupported_contracts(request_batch, message: str) -> None:
@@ -2524,19 +2524,21 @@ def test_pipeline_declares_step_execution_support() -> None:
     assert supports_step_execution(pipeline) is True
 
 
-def test_preprocess_materializes_camera_action_script_without_action_path() -> None:
+@pytest.mark.parametrize("block_frames", [3, 4])
+def test_preprocess_materializes_camera_action_script_without_action_path(block_frames: int) -> None:
     module = _load_pipeline_module()
     sampling = _SamplingParams(include_action=False)
-    sampling.extra_args["camera_action_script"] = [[["w"], ["w"], ["w"]], [["a"], [], []]]
+    sampling.extra_args["camera_action_script"] = [[["w"]] * block_frames, [["a"]] + [[]] * (block_frames - 1)]
     request = OmniDiffusionRequest(prompt=_prompt(), sampling_params=sampling, request_id="req-1")
 
-    result = module.get_lingbot_world_pre_process_func(_od_config())(request)
+    config = _od_config(tf_model_config={"num_frames_per_block": block_frames})
+    result = module.get_lingbot_world_pre_process_func(config)(request)
 
     assert result.sampling_params.extra_args["_lingbot_camera_trajectory"] is None
     assert result.sampling_params.extra_args["_lingbot_camera_actions"] is None
     assert result.sampling_params.extra_args["_lingbot_camera_action_script"] == (
-        (("w",), ("w",), ("w",)),
-        (("a",), (), ()),
+        (("w",),) * block_frames,
+        (("a",),) + ((),) * (block_frames - 1),
     )
 
 
