@@ -35,6 +35,7 @@ from vllm_omni.experimental.ar_diffusion.kv_cache.first_block import (
 )
 
 if TYPE_CHECKING:
+    from vllm_omni.diffusion.models.lingbot_world.fastframes import FastFramesCapture
     from vllm_omni.diffusion.models.lingbot_world.transformer import CausalLingBotWorldTransformer3DModel
     from vllm_omni.diffusion.models.progress_bar import TqdmProgressBar
     from vllm_omni.experimental.ar_diffusion.kv_cache.state import ARDiffusionKVState
@@ -150,6 +151,7 @@ class LingBotDMDBlockRunner:
         step_index: int,
         camera_cache: CameraModulationCache | None = None,
         camera_pose: torch.Tensor | None = None,
+        fastframes_capture: FastFramesCapture | None = None,
     ) -> torch.Tensor:
         """Predict flow for one denoise step.
 
@@ -179,6 +181,7 @@ class LingBotDMDBlockRunner:
             start_frame=start_frame,
             update_cache=commit_probe,
             camera_modulation_cache=camera_cache,
+            **({"fastframes_capture": fastframes_capture} if fastframes_capture is not None else {}),
         )
         if flow_prediction.shape != current_latents.shape:
             raise RuntimeError(

@@ -41,6 +41,7 @@ from vllm_omni.experimental.ar_diffusion.kv_cache.paged_attention import (
 if TYPE_CHECKING:
     from vllm.model_executor.layers.quantization.base_config import QuantizationConfig
 
+    from vllm_omni.diffusion.models.lingbot_world.fastframes import FastFramesCapture
     from vllm_omni.diffusion.models.lingbot_world.leased_post_attention import Lease
     from vllm_omni.experimental.ar_diffusion.worldkv import WorldKV
 
@@ -326,6 +327,7 @@ class LingBotSelfAttention(nn.Module):
         update_cache: bool = True,
         _projection_lease: Lease | None = None,
         worldkv_layer: tuple[WorldKV, int] | None = None,
+        canonical_kv: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> torch.Tensor:
         # Project logical [B, S, D] tokens into TP-local
         # [B, S, num_local_heads, head_dim].
@@ -337,6 +339,9 @@ class LingBotSelfAttention(nn.Module):
         query = query.unflatten(2, (self.num_local_heads, self.head_dim))
         key = key.unflatten(2, (self.num_local_heads, self.head_dim))
         value = value.unflatten(2, (self.num_local_heads, self.head_dim))
+        if canonical_kv is not None:
+            canonical_kv[0].copy_(key[0])
+            canonical_kv[1].copy_(value[0])
         if rotary_emb is not None:
             cos, sin = rotary_emb
             query = self.rotary_embedding(query, cos, sin)
@@ -653,6 +658,7 @@ class LingBotAttentionBlock(nn.Module):
         rotary_emb: tuple[torch.Tensor, torch.Tensor],
         camera_modulation: tuple[torch.Tensor, torch.Tensor] | None = None,
         worldkv_layer: tuple[WorldKV, int] | None = None,
+        canonical_kv: tuple[torch.Tensor, torch.Tensor] | None = None,
     ) -> tuple[torch.Tensor, LingBotAttentionCache]:
         batch_size, token_count, dim = hidden_states.shape
         if (
@@ -689,6 +695,8 @@ class LingBotAttentionBlock(nn.Module):
             projection_kwargs = {"_projection_lease": lease} if lease is not None else {}
             if worldkv_layer is not None:
                 projection_kwargs["worldkv_layer"] = worldkv_layer
+            if canonical_kv is not None:
+                projection_kwargs["canonical_kv"] = canonical_kv
             attention_output = self.self_attn(
                 normalized,
                 cache=self_cache,
@@ -1057,6 +1065,10 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
             "sliding_window_num_frames": 18,
             "local_attn_size": -1,
         }
+        if config.get("num_attention_heads") == 12:
+            checkpoint_contract.update(
+                num_attention_heads=12, ffn_dim=8960, num_layers=30, sink_size=6, num_frames_per_block=4
+            )
         class_name = config.get("_class_name")
         if class_name is not None and class_name != "CausalLingBotWorldTransformer3DModel":
             raise ValueError(
@@ -1069,7 +1081,7 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
             actual = kwargs.get(name, expected)
             if actual != expected:
                 raise ValueError(f"LingBot checkpoint config {name} must be {expected!r}, got {actual!r}.")
-        return cls(**kwargs, quant_config=quant_config, prefix=prefix)
+        return cls(**(checkpoint_contract | kwargs), quant_config=quant_config, prefix=prefix)
 
     def allocate_cache(
         self,
@@ -1291,6 +1303,7 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
         start_frame: int,
         update_cache: bool,
         camera_modulation_cache: CameraModulationCache | None = None,
+        fastframes_capture: FastFramesCapture | None = None,
     ) -> torch.Tensor:
         transaction = (
             cache.worldkv.forward(start_frame, hidden_states.shape[2], commit=update_cache)
@@ -1307,6 +1320,7 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
                 start_frame=start_frame,
                 update_cache=update_cache,
                 camera_modulation_cache=camera_modulation_cache,
+                fastframes_capture=fastframes_capture,
             )
 
     def _forward(
@@ -1320,6 +1334,7 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
         start_frame: int,
         update_cache: bool,
         camera_modulation_cache: CameraModulationCache | None = None,
+        fastframes_capture: FastFramesCapture | None = None,
     ) -> torch.Tensor:
         if not isinstance(update_cache, bool):
             raise ValueError("update_cache must be a boolean.")
@@ -1438,6 +1453,9 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
                 )
         timestep_projection = self._stage_timestep_projection(timestep_projection)
         rotary_emb = (cosine, sine)
+        canonical_kv = fastframes_capture.kv if fastframes_capture is not None else None
+        if canonical_kv is not None:
+            fastframes_capture.rope = rotary_emb
         # Phase 3: each layer receives its own cache entry. Text K/V is passed
         # only when absent; the returned cache is stored for subsequent DMD
         # steps and causal blocks in this request. A caller-held camera cache
@@ -1456,6 +1474,7 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
                 camera_hidden_states,
                 camera_modulation=camera_modulation,
                 **({"worldkv_layer": (cache.worldkv, index)} if cache.worldkv is not None else {}),
+                **({"canonical_kv": (canonical_kv[0][index], canonical_kv[1][index])} if canonical_kv else {}),
                 self_cache=cache.self_attention[index] if cache.worldkv is None else None,
                 cross_cache=cache.cross_attention[index],
                 current_start=current_start,
@@ -1465,6 +1484,8 @@ class CausalLingBotWorldTransformer3DModel(nn.Module):
             )
             cache.cross_attention[index] = cross_cache
 
+        if fastframes_capture is not None and fastframes_capture.capture_pixels:
+            fastframes_capture.pixel_inputs = (hidden_states, timestep_embedding.unsqueeze(2))
         # Phase 4: project local tokens before gathering the much narrower flow values.
         hidden_states = self.head(
             hidden_states,

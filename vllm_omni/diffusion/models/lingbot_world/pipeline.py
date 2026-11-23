@@ -57,6 +57,7 @@ from vllm_omni.diffusion.models.lingbot_world.camera import (
     resolve_trusted_action_directory,
 )
 from vllm_omni.diffusion.models.lingbot_world.dmd_block import ARBlockContext, LingBotDMDBlockRunner
+from vllm_omni.diffusion.models.lingbot_world.fastframes import FastFramesCapture, LingBotFastFrames
 from vllm_omni.diffusion.models.lingbot_world.transformer import (
     CameraModulationCache,
     CausalLingBotWorldTransformer3DModel,
@@ -95,6 +96,7 @@ from vllm_omni.experimental.ar_diffusion.tick_protocol import (
     ARDiffusionChunkMetadata,
     ARDiffusionTickRequest,
 )
+from vllm_omni.platforms import current_omni_platform
 
 logger = init_logger(__name__)
 
@@ -152,7 +154,7 @@ class _LingBotRequestInputs:
       replay loads it from ``extra_args["action_path"]``; the tick entry point
       receives the same content as a ``lingbot.camera_trajectory.v1`` control.
       Integrating WASD actions also produces one, written back onto this field.
-    - ``camera_actions`` is WASD key state for *one* three-latent-frame block:
+    - ``camera_actions`` is WASD key state for *one* latent-frame block:
       the unit every path reduces to before the camera is embedded. The tick
       entry point fills it directly, because one of its requests is one block;
       step execution derives it per block by slicing ``camera_action_script``.
@@ -203,6 +205,7 @@ class _LingBotARSessionState:
     condition_fixed_point: torch.Tensor | None = None
     camera_tail: CameraTrajectory | None = None
     camera_pitch: float = 0.0
+    fastframes_decoder: nn.Module | None = None
 
 
 def _positive_finite_flow_shift(value: Any) -> float:
@@ -410,6 +413,7 @@ def _preprocess_lingbot_request(
     *,
     configured_action_root: str | None,
     stepwise: bool,
+    frames_per_block: int,
 ) -> OmniDiffusionRequest:
     """Materialize request-local files once before dispatching GPU workers."""
     prompt = request.prompt
@@ -474,7 +478,7 @@ def _preprocess_lingbot_request(
             trajectory = None
             camera_actions = parse_lingbot_camera_action_frames(
                 camera_control.data,
-                expected_frames=3,
+                expected_frames=frames_per_block,
             )
         else:
             raise ValueError(
@@ -487,7 +491,7 @@ def _preprocess_lingbot_request(
             raise ValueError("camera_action_script cannot be combined with action_path.")
         camera_action_script = parse_lingbot_camera_action_script(
             extra_args.get("camera_action_script"),
-            frames_per_chunk=3,
+            frames_per_chunk=frames_per_block,
         )
         trajectory = None
         camera_actions = None
@@ -545,10 +549,13 @@ def get_lingbot_world_pre_process_func(
     model_config = getattr(od_config, "model_config", None) or {}
     configured_action_root = model_config.get("lingbot_action_root") or os.environ.get(_ACTION_ROOT_ENV)
     stepwise = bool(getattr(od_config, "step_execution", False) or getattr(od_config, "streaming_output", False))
+    transformer_config = getattr(od_config, "tf_model_config", {})
+    default_block_frames = 4 if transformer_config.get("num_attention_heads") == 12 else 3
     return partial(
         _preprocess_lingbot_request,
         configured_action_root=configured_action_root,
         stepwise=stepwise,
+        frames_per_block=int(transformer_config.get("num_frames_per_block", default_block_frames)),
     )
 
 
@@ -628,6 +635,7 @@ class LingBotWorldCausalDMDPipeline(
     dummy_run_num_frames: ClassVar[int] = 0
     _AR_BRANCH = "main"
     _AR_TEXT_CACHE = "text"
+    _fastframes: LingBotFastFrames | None = None
 
     def __init__(
         self,
@@ -674,9 +682,34 @@ class LingBotWorldCausalDMDPipeline(
                 )
         self.device = get_local_device()
         dtype = getattr(od_config, "dtype", torch.bfloat16)
+        self._ar_height = int(model_config.get("ar_diffusion_height", 480))
+        self._ar_width = int(model_config.get("ar_diffusion_width", 832))
+        pixel_decoder = model_config.get("lingbot_fastframes_pixel_decoder")
+        kv_refiner = model_config.get("lingbot_fastframes_kv_refiner")
+        offload_strategy = resolve_offload_strategy(od_config)
+        enable_fastframes = pixel_decoder is not None or kv_refiner is not None
+        if enable_fastframes:
+            for weights in (pixel_decoder, kv_refiner):
+                if weights is not None and (not isinstance(weights, str) or not weights.strip()):
+                    raise ValueError("FastFrames weights must be local safetensors file paths.")
+            if (
+                not current_omni_platform.is_cuda()
+                or self.device.type != "cuda"
+                or dtype != torch.bfloat16
+                or getattr(parallel_config, "world_size", 1) != 1
+                or not od_config.step_execution
+                or not od_config.enforce_eager
+                or offload_strategy != OffloadStrategy.NONE
+                or od_config.quantization_config is not None
+            ):
+                raise ValueError("FastFrames requires single-GPU CUDA BF16 eager step execution without offload.")
+            if (self._ar_height, self._ar_width) != (LingBotFastFrames.height, LingBotFastFrames.width):
+                raise ValueError("FastFrames requires ar_diffusion_height=464 and ar_diffusion_width=832.")
+            if worldkv_value is not None or reuse_last_step_kv:
+                raise ValueError("FastFrames requires paged LingBot KV with clean-x0 commits enabled.")
         model = od_config.model
         local_files_only = os.path.exists(model)
-        managed_component_placement = resolve_offload_strategy(od_config) in (
+        managed_component_placement = offload_strategy in (
             OffloadStrategy.MODEL_LEVEL,
             OffloadStrategy.LAYER_WISE,
         )
@@ -732,6 +765,15 @@ class LingBotWorldCausalDMDPipeline(
         from vllm_omni.experimental.ar_diffusion.worldkv import WorldKVConfig
 
         native = self.transformer.config
+        if enable_fastframes:
+            if native.num_attention_heads != LingBotFastFrames.heads:
+                raise ValueError("FastFrames requires the LingBot World 1.3B four-latent-frame checkpoint config.")
+            self._fastframes = LingBotFastFrames(pixel_decoder=pixel_decoder, kv_refiner=kv_refiner, device=self.device)
+            logger.info(
+                "LingBot FastFrames enabled (pixel decoder=%s, KV refiner=%s).",
+                pixel_decoder is not None,
+                kv_refiner is not None,
+            )
         self._worldkv_config = WorldKVConfig.parse(
             worldkv_value,
             window_frames=(
@@ -771,8 +813,6 @@ class LingBotWorldCausalDMDPipeline(
 
         self.vae_scale_factor_temporal = int(getattr(self.vae.config, "scale_factor_temporal", 4))
         self.vae_scale_factor_spatial = int(getattr(self.vae.config, "scale_factor_spatial", 8))
-        self._ar_height = int(model_config.get("ar_diffusion_height", 480))
-        self._ar_width = int(model_config.get("ar_diffusion_width", 832))
         self._ar_diffusion_kv_state: ARDiffusionKVState | None = None
         # The loaded text encoder and transformer projections are immutable in
         # normal inference. Weight or adapter mutation must advance this token.
@@ -812,6 +852,9 @@ class LingBotWorldCausalDMDPipeline(
                 "_generate_block",
                 "text_encoder.forward",
                 "tokenizer.forward",
+                "denoise_step",
+                "_dmd_blocks.commit_block_kv",
+                *(["_decode_fastframes_chunk", "_fastframes.refine_and_commit"] if enable_fastframes else []),
             ],
             enable_diffusion_pipeline_profiler=od_config.enable_diffusion_pipeline_profiler,
         )
@@ -868,6 +911,7 @@ class LingBotWorldCausalDMDPipeline(
             # Policy memory owns history; the legacy pool retains only its
             # minimum geometry and never receives duplicate self-KV writes.
             sink_frames, recent_window_frames = 0, 1
+        fastframes_bytes = self._fastframes.state_bytes_per_session() if self._fastframes is not None else 0
         return ARDiffusionKVCacheSpec(
             num_layers=int(self.transformer.config.num_layers),
             num_kv_heads=int(self.transformer.blocks[0].self_attn.num_sp_heads),
@@ -893,6 +937,7 @@ class LingBotWorldCausalDMDPipeline(
                 + camera_bytes_per_session
                 + 2 * self._condition_encoder_cache_bytes()  # Committed and in-flight histories.
                 + self._streaming_decode_bytes_per_session()
+                + fastframes_bytes
             ),
         )
 
@@ -932,6 +977,8 @@ class LingBotWorldCausalDMDPipeline(
         field is documented as a conservative upper bound, it is fixed at load
         time, and whether a request asks for pixels is not known then.
         """
+        if self._fastframes is not None and self._fastframes.pixel_head is not None:
+            return 0
         decoder = self._streaming_decoder()
         if decoder is None:
             return 0
@@ -1123,7 +1170,7 @@ class LingBotWorldCausalDMDPipeline(
         block_frames = int(self.transformer.config.num_frames_per_block)
         if num_latent_frames % block_frames:
             raise ValueError(
-                "num_frames must map to a whole number of configured three-frame latent blocks; "
+                "num_frames must map to a whole number of configured latent blocks; "
                 f"got num_frames={num_frames}, latent_frames={num_latent_frames}, block_frames={block_frames}."
             )
 
@@ -1644,6 +1691,8 @@ class LingBotWorldCausalDMDPipeline(
         return prompt_embeds
 
     def forward(self, req: DiffusionRequestBatch) -> DiffusionOutput:
+        if self._fastframes is not None:
+            raise ValueError("FastFrames requires stepwise LingBot generation.")
         inputs = self._parse_request(req)
         if inputs.camera_action_script is not None:
             # Only step execution walks a whole rollout inside one request, so
@@ -1651,7 +1700,7 @@ class LingBotWorldCausalDMDPipeline(
             # steering the camera.
             raise ValueError(
                 "camera_action_script is read only by LingBot step execution; "
-                "request mode takes one three-frame camera_actions control per "
+                "request mode takes one camera_actions control per "
                 "block, or a camera_trajectory for the request."
             )
         if inputs.camera_trajectory is None and inputs.camera_actions is None:
@@ -1675,7 +1724,7 @@ class LingBotWorldCausalDMDPipeline(
                 raise ValueError("ar_diffusion_tick.prompt must match the standard request prompt.")
             block_frames = int(self.transformer.config.num_frames_per_block)
             if inputs.num_latent_frames != block_frames:
-                raise ValueError("A LingBot AR-Diffusion request must generate exactly one three-latent-frame block.")
+                raise ValueError(f"A LingBot AR-Diffusion request must generate one {block_frames}-latent-frame block.")
             if (inputs.height, inputs.width) != (
                 self._ar_height,
                 self._ar_width,
@@ -2308,7 +2357,14 @@ class LingBotWorldCausalDMDPipeline(
         schedule = extra["schedule"]
         step_in_chunk = state.step_in_chunk
         ar_context = self._ar_block_context(extra["ar_cross_attention"])
-        return self._dmd_blocks.probe_step(
+        capture = None
+        if self._fastframes is not None and step_in_chunk == len(schedule) - 1:
+            capture = self._fastframes.capture(
+                first_chunk=state.chunk_index == 0,
+                pixels=extra["inputs"].output_type != "latent",
+                device=latents.device,
+            )
+        flow_prediction = self._dmd_blocks.probe_step(
             current_latents=latents,
             condition=extra["condition"],
             camera=extra["camera"],
@@ -2320,7 +2376,11 @@ class LingBotWorldCausalDMDPipeline(
             step_index=step_in_chunk,
             camera_cache=extra["camera_cache"],
             camera_pose=extra.get("retrieval_pose"),
+            **({"fastframes_capture": capture} if capture is not None else {}),
         )
+        if capture is not None:
+            extra["fastframes_capture"] = capture
+        return flow_prediction
 
     def step_scheduler(self, state: StepRequestState, noise_pred: torch.Tensor, **kwargs: Any) -> None:
         del kwargs
@@ -2344,6 +2404,24 @@ class LingBotWorldCausalDMDPipeline(
         state.step_in_chunk += 1
         state.step_index = state.step_in_chunk
 
+    def _decode_fastframes_chunk(
+        self,
+        session: _LingBotARSessionState,
+        capture: FastFramesCapture | None,
+        *,
+        first_chunk: bool,
+    ) -> np.ndarray:
+        if capture is None or capture.pixel_inputs is None or self._fastframes is None:
+            raise RuntimeError("FastFrames pixel decode requires the final denoise probe's features.")
+        decoder = session.fastframes_decoder
+        if decoder is None:
+            decoder = session.fastframes_decoder = self._fastframes.new_decoder()
+        video = decoder(*capture.pixel_inputs)
+        if first_chunk:
+            # Causal Wan geometry emits one frame for the first latent.
+            video = video[:, 3:]
+        return _uint8_frames(video.transpose(1, 2).float())
+
     def post_decode(self, state: StepRequestState, **kwargs: Any) -> DiffusionOutput:
         del kwargs
         self._require_bound_ar_state()
@@ -2354,24 +2432,43 @@ class LingBotWorldCausalDMDPipeline(
         session_state = self._ar_sessions[state.request_id]
         if session_state.pending_encoder_cache is None:
             raise RuntimeError("LingBot condition encoder has no prepared chunk to commit.")
-        self._dmd_blocks.commit_block_kv(
-            latents=latents,
-            condition=extra["condition"],
-            camera=extra["camera"],
-            prompt_embeds=cast(torch.Tensor, state.prompt_embeds),
-            cache=None,
-            ar=self._ar_block_context(extra["ar_cross_attention"]),
-            start_frame=int(extra["start_frame"]),
-            camera_cache=extra.pop("camera_cache"),
-            camera_pose=extra.get("retrieval_pose"),
-        )
         completed_chunk_index = state.chunk_index
+        capture = extra.pop("fastframes_capture", None)
+        camera_cache = extra.pop("camera_cache")
+        ar = self._ar_block_context(extra["ar_cross_attention"])
+        fastframes = self._fastframes
+        if fastframes is not None and fastframes.refiner is not None and completed_chunk_index > 0:
+            if capture is None or ar is None:
+                raise RuntimeError("FastFrames KV refinement requires a captured denoise step and a bound KV cache.")
+            fastframes.refine_and_commit(
+                capture,
+                latents=latents,
+                condition=extra["condition"],
+                timestep=extra["schedule"][-1][0],
+                transformer=self.transformer,
+                ar=ar,
+            )
+        else:
+            self._dmd_blocks.commit_block_kv(
+                latents=latents,
+                condition=extra["condition"],
+                camera=extra["camera"],
+                prompt_embeds=cast(torch.Tensor, state.prompt_embeds),
+                cache=None,
+                ar=ar,
+                start_frame=int(extra["start_frame"]),
+                camera_cache=camera_cache,
+                camera_pose=extra.get("retrieval_pose"),
+            )
         inputs: _LingBotRequestInputs = extra["inputs"]
         # "video" is the payload key the output formatter treats as primary, so
         # a streaming client receives frames on ``images`` like any other video
         # pipeline; latent mode keeps the tensor for offline consumers.
         if inputs.output_type == "latent":
             payload: dict[str, Any] = {"latents": latents}
+        elif fastframes is not None and fastframes.pixel_head is not None:
+            pixels = self._decode_fastframes_chunk(session_state, capture, first_chunk=completed_chunk_index == 0)
+            payload = {"video": pixels}
         else:
             pixels = self._decode_chunk_to_pixels(latents, session_id=state.request_id)
             payload = {} if pixels is None else {"video": pixels}
@@ -2407,7 +2504,10 @@ class LingBotWorldCausalDMDPipeline(
         temporal factor, so chunk 0 matches the independent count and later chunks are ``block_frames * temporal``.
         """
         decode_state = self._streaming_decode_states.get(state.request_id)
-        if decode_state is not None and decode_state.started:
+        fastframes_streaming = (
+            self._fastframes is not None and self._fastframes.pixel_head is not None and state.chunk_index > 0
+        )
+        if fastframes_streaming or (decode_state is not None and decode_state.started):
             return block_frames * self.vae_scale_factor_temporal
         return (block_frames - 1) * self.vae_scale_factor_temporal + 1
 
