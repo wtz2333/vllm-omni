@@ -19,9 +19,11 @@ from vllm.benchmarks.serve import main_async as vllm_main_async
 import vllm_omni.benchmarks.patch.patch  # noqa: F401
 from vllm_omni.benchmarks.omniinteract import omniinteract_output_lock
 from vllm_omni.benchmarks.patch.patch import (
+    CAPTURE_AUDIO_STREAM_DETAILS,
     maybe_enable_stage_metrics,
     set_duplex_metric_aggregation,
     set_fail_fast_on_timeout,
+    set_isolate_prefix_cache,
     set_print_stage,
     set_request_timeout_s,
     should_request_stage_metrics,
@@ -95,6 +97,7 @@ async def main_async(args: argparse.Namespace) -> dict[str, Any]:
     _use_endpoint_backend_when_implicit(args)
     _validate_fail_fast_on_timeout(args)
     set_fail_fast_on_timeout(getattr(args, "omni_fail_fast_on_timeout", False))
+    set_isolate_prefix_cache(getattr(args, "omni_isolate_prefix_cache", False))
     set_print_stage(getattr(args, "print_stage", False))
     set_duplex_metric_aggregation(getattr(args, "duplex_metric_aggregation", "session"))
     args.extra_body = maybe_enable_stage_metrics(
@@ -106,8 +109,12 @@ async def main_async(args: argparse.Namespace) -> dict[str, Any]:
         if getattr(args, "dataset_name", None) == "omniinteract"
         else contextlib.nullcontext()
     )
-    with lock:
-        return await vllm_main_async(args)
+    token = CAPTURE_AUDIO_STREAM_DETAILS.set(bool(getattr(args, "save_detailed", False)))
+    try:
+        with lock:
+            return await vllm_main_async(args)
+    finally:
+        CAPTURE_AUDIO_STREAM_DETAILS.reset(token)
 
 
 def main(args: argparse.Namespace) -> dict[str, Any]:
