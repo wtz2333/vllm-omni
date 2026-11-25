@@ -3,19 +3,22 @@
 
 import json
 import os
+import runpy
 from copy import deepcopy
 from pathlib import Path
 
 import numpy as np
 import pytest
 import torch
+from safetensors.torch import load_file, save_file
 from torch import nn
 from transformers import AutoTokenizer
 
-from tests.diffusion.models.hy_nomas.test_hy_nomas import TRANSFORMER_CONFIG
+from tests.diffusion.models.hy_nomas.test_hy_nomas import TRANSFORMER_CONFIG, _write_lora
 from vllm_omni.diffusion.models.hy_nomas.camera import prepare_camera_inputs
-from vllm_omni.diffusion.models.hy_nomas.hy_nomas_transformer import HyNomasTransformer
+from vllm_omni.diffusion.models.hy_nomas.hy_nomas_transformer import HyNomasTransformer, load_transformer_weights
 from vllm_omni.diffusion.models.hy_nomas.layers import TimestepEmbedder
+from vllm_omni.diffusion.models.hy_nomas.lora import HyNomasLoRA
 from vllm_omni.diffusion.models.hy_nomas.pipeline_hy_nomas import build_model_config
 from vllm_omni.diffusion.models.hy_nomas.text_encoder import _VIDEO_SYSTEM, TextEncoder
 
@@ -120,6 +123,34 @@ def test_native_dit_names_match_actual_checkpoint():
     mapped = {name for name, _ in _DIT_NAMES.apply((name, None) for name in names)}
     model = HyNomasTransformer(TRANSFORMER_CONFIG, device="meta")
     assert set(dict(model.named_parameters())) == mapped
+
+
+@pytest.mark.parametrize("dtype", [torch.float32, torch.bfloat16])
+def test_lora_merge_matches_official_reference(tmp_path, dtype):
+    reference = os.environ.get("HY_NOMAS_REFERENCE_REPO", "")
+    if not reference:
+        pytest.skip("Set HY_NOMAS_REFERENCE_REPO to the Tencent-Hunyuan/Hy-Nomas checkout at 911cea6458.")
+    merge = runpy.run_path(str(Path(reference) / "scripts" / "train" / "merge_lora.py"))["merge"]
+    generator = torch.Generator().manual_seed(42)
+    base_file = tmp_path / "base.safetensors"
+    merged_file = tmp_path / "merged.safetensors"
+    adapter_dir = tmp_path / "adapter"
+    base = {"0.weight": torch.randn(8, 6, generator=generator, dtype=dtype)}
+    save_file(base, base_file)
+    _write_lora(
+        adapter_dir,
+        {"format_version": 1, "rank": 3, "alpha": 5, "targets": ["0"]},
+        {
+            "_checkpoint_wrapped_module.0.lora_A.weight": torch.randn(3, 6, generator=generator),
+            "_checkpoint_wrapped_module.0.lora_B.weight": torch.randn(8, 3, generator=generator),
+        },
+    )
+    merge(base_file, adapter_dir, merged_file, device="cpu")
+    model = nn.Sequential(nn.Linear(6, 8, bias=False, dtype=torch.bfloat16))
+    load_transformer_weights(model, base.items(), HyNomasLoRA(adapter_dir, scale=1.0))
+    expected = load_file(merged_file)["0.weight"].bfloat16()
+    assert not torch.equal(base["0.weight"].bfloat16(), expected)
+    torch.testing.assert_close(model[0].weight, expected, rtol=0, atol=0)
 
 
 def test_native_defaults_match_pinned_reference():

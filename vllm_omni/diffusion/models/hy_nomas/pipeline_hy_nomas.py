@@ -7,6 +7,7 @@ import json
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from contextlib import ExitStack, contextmanager, nullcontext
 from dataclasses import dataclass, field
+from glob import escape
 from itertools import groupby
 from pathlib import Path
 from typing import Any, ClassVar
@@ -49,6 +50,7 @@ from vllm_omni.diffusion.models.hy_nomas.hy_nomas_transformer import (
     validate_sequence_parallelism,
 )
 from vllm_omni.diffusion.models.hy_nomas.interaction import HyNomasInteractionSession, validate_camera_payload
+from vllm_omni.diffusion.models.hy_nomas.lora import HyNomasLoRA
 from vllm_omni.diffusion.models.hy_nomas.processing_hy_nomas import (
     action_conditioning,
     normalize_request,
@@ -152,8 +154,10 @@ def validate_config(config: OmniDiffusionConfig) -> None:
         raise ValueError("Hy-Nomas requires dtype=bfloat16.")
     if config.cache_backend not in (None, "none"):
         raise ValueError("Hy-Nomas does not support a diffusion cache backend.")
-    if config.quantization_config is not None or config.lora_path:
-        raise ValueError("Hy-Nomas currently supports the unquantized distilled checkpoint without LoRA.")
+    if config.quantization_config is not None:
+        raise ValueError("Hy-Nomas requires unquantized DiT weights for the base, merged and LoRA profiles.")
+    if config.lora_path is not None and config.lora_backend != "distill":
+        raise ValueError("Hy-Nomas requires lora_backend='distill' to merge an official LoRA at startup.")
     if config.flow_shift not in (None, 5.0):
         raise ValueError("Hy-Nomas requires flow_shift=5.")
     _validate_compile(config)
@@ -163,6 +167,7 @@ def validate_config(config: OmniDiffusionConfig) -> None:
     allowed = {
         "text_encoder",
         "decoder_parallel_mode",
+        "dit_checkpoint",
         *(f"ar_{name}" for name in HyNomasARConfig.__dataclass_fields__),
     }
     if custom.keys() - allowed:
@@ -183,6 +188,9 @@ def validate_config(config: OmniDiffusionConfig) -> None:
     text_encoder = custom.get("text_encoder")
     if "text_encoder" in custom and (not isinstance(text_encoder, str) or not text_encoder.strip()):
         raise ValueError("Hy-Nomas text_encoder must be a nonempty model ID or local path.")
+    dit_checkpoint = custom.get("dit_checkpoint")
+    if "dit_checkpoint" in custom and (not isinstance(dit_checkpoint, str) or not dit_checkpoint.strip()):
+        raise ValueError("Hy-Nomas dit_checkpoint must be a local safetensors file path.")
 
 
 def _as_versioned_tensor(tensor: torch.Tensor) -> torch.Tensor:
@@ -221,23 +229,33 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
     _dit_modules: ClassVar[list[str]] = ["transformer"]
     _encoder_modules: ClassVar[list[str]] = ["text_encoder"]
     _vae_modules: ClassVar[list[str]] = ["vae"]
+    _lora: HyNomasLoRA | None = None
 
     def __init__(self, *, od_config: OmniDiffusionConfig, prefix: str = ""):
         super().__init__()
         del prefix
         validate_config(od_config)
         self.od_config = od_config
+        self._lora = HyNomasLoRA.from_args(od_config.lora_path, od_config.lora_scale)
+        custom = od_config.custom_pipeline_args or {}
+        dit_checkpoint = None
+        if "dit_checkpoint" in custom:
+            dit_checkpoint = Path(custom["dit_checkpoint"]).expanduser()
+            if dit_checkpoint.suffix != ".safetensors":
+                raise ValueError("Hy-Nomas dit_checkpoint must be a .safetensors file.")
+            if not dit_checkpoint.is_file():
+                raise FileNotFoundError(f"Missing Hy-Nomas dit_checkpoint: {dit_checkpoint}")
         self.device = get_local_device()
         if self.device.type != "cuda":
             raise ValueError("Hy-Nomas requires CUDA.")
-        self.decoder_parallel_mode = (od_config.custom_pipeline_args or {}).get("decoder_parallel_mode", "none")
-        self.initialize_ar(od_config.custom_pipeline_args or {})
+        self.decoder_parallel_mode = custom.get("decoder_parallel_mode", "none")
+        self.initialize_ar(custom)
         self.sp_size = od_config.parallel_config.ulysses_degree
         self.target_dtype = torch.bfloat16
         self._cpu_offload = False
         self._vae_offloaded = False
         root = Path(od_config.model)
-        text_encoder_override = (od_config.custom_pipeline_args or {}).get("text_encoder")
+        text_encoder_override = custom.get("text_encoder")
         if not root.is_dir():
             root = Path(
                 download_weights_from_hf_specific(
@@ -290,6 +308,15 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
             )
             for component, prefix in (("transformer", "transformer."), ("decoder", "vae."))
         ]
+        if dit_checkpoint is not None:
+            self.weights_sources[0] = DiffusersPipelineLoader.ComponentSource(
+                model_or_path=str(dit_checkpoint.parent),
+                subfolder=None,
+                revision=None,
+                prefix="transformer.",
+                fall_back_to_pt=False,
+                allow_patterns_overrides=[escape(dit_checkpoint.name)],
+            )
         self.transformer = build_transformer(self.args, self.device, transformer_config)
         self.text_encoder = (
             TextEncoder(
@@ -331,7 +358,7 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
             module = getattr(self, component)
             stream = ((name.partition(".")[2], value) for name, value in entries)
             if component == "transformer":
-                names = load_transformer_weights(module, stream)
+                names = load_transformer_weights(module, stream, self._lora)
             elif hasattr(module, "load_weights"):
                 # The native decoder stacks the checkpoint's q/k/v and gate/up projections.
                 names = module.load_weights(stream)
@@ -343,6 +370,9 @@ class HyNomasPipeline(nn.Module, InteractionMixin, SupportsComponentDiscovery):
                 f"Hy-Nomas checkpoint is missing component weights: {sorted({'transformer', 'vae'} - components)}"
             )
         loaded.update(f"text_encoder.{name}" for name, _ in self.text_encoder.named_parameters())
+        if self._lora is not None:
+            self.lora_is_fused = True
+            logger.info("Loaded Hy-Nomas LoRA from %s with lora_scale=%g.", self._lora.directory, self._lora.scale)
         return loaded
 
     def setup_compile(self) -> None:

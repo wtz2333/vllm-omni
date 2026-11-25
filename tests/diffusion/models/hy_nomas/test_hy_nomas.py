@@ -5,6 +5,7 @@ import json
 import os
 import subprocess
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import Mock
 
@@ -16,9 +17,11 @@ from safetensors.torch import load_file, save_file
 from torch import nn
 from torch.nn.attention import SDPBackend, sdpa_kernel
 from vllm.config import LoadConfig
+from vllm.lora.request import LoRARequest
 
 from tests.diffusion.models.hy_nomas import conftest as hy_nomas_conftest
 from tests.diffusion.models.hy_nomas.test_native_runtime import _small_transformer
+from vllm_omni.config.resolver import resolve_omni_config
 from vllm_omni.diffusion.data import DiffusionParallelConfig, OmniDiffusionConfig, resolve_model_class_name
 from vllm_omni.diffusion.executor.uniproc_executor import UniProcDiffusionExecutor
 from vllm_omni.diffusion.media import VideoValueRange
@@ -27,6 +30,7 @@ from vllm_omni.diffusion.model_metadata import get_diffusion_model_metadata
 from vllm_omni.diffusion.models.hy_nomas import pipeline_hy_nomas
 from vllm_omni.diffusion.models.hy_nomas.configuration_hy_nomas import MODEL_ID, REQUIRED_FILES
 from vllm_omni.diffusion.models.hy_nomas.hy_nomas_transformer import build_transformer, load_transformer_weights
+from vllm_omni.diffusion.models.hy_nomas.lora import HyNomasLoRA
 from vllm_omni.diffusion.models.hy_nomas.pipeline_hy_nomas import (
     HyNomasPipeline,
     build_model_config,
@@ -325,6 +329,12 @@ def test_duration_resolves_frame_count(duration, frames):
     assert normalize_request("A forest", params).num_frames == frames
     params.num_frames = frames + 4
     with pytest.raises(OmniClientError, match="conflicts with duration"):
+        normalize_request("A forest", params)
+
+
+def test_request_rejects_runtime_lora():
+    params = OmniDiffusionSamplingParams(lora_request=LoRARequest("cinematic", 1, "/path/to/adapter"))
+    with pytest.raises(OmniClientError, match="startup LoRA"):
         normalize_request("A forest", params)
 
 
@@ -660,7 +670,9 @@ def test_module_offload_rejects_unsupported_components(components, mocker):
         ({"dtype": torch.float32}, "bfloat16"),
         ({"cache_backend": "cache_dit"}, "cache backend"),
         ({"quantization_config": "int8"}, "unquantized"),
+        ({"quantization_config": "int8", "lora_path": "adapter", "lora_backend": "distill"}, "unquantized"),
         ({"lora_path": "adapter"}, "LoRA"),
+        ({"custom_pipeline_args": {"dit_checkpoint": None}}, "dit_checkpoint"),
         ({"custom_pipeline_args": {"arbitrary": True}}, "custom_pipeline_args"),
         ({"custom_pipeline_args": {"decoder_parallel_mode": "unknown"}}, "decoder_parallel_mode"),
         ({"custom_pipeline_args": {"decoder_parallel_mode": "window"}}, "requires more than one Ulysses rank"),
@@ -682,6 +694,7 @@ def test_unsupported_engine_features(overrides, match):
         cache_backend="none",
         quantization_config=None,
         lora_path=None,
+        lora_backend="peft",
         custom_pipeline_args={},
         flow_shift=None,
         enforce_eager=True,
@@ -755,6 +768,30 @@ def test_native_model_preserves_isolated_executor_profile(backend):
 @pytest.mark.parametrize("backend", ["mp", "ray"])
 def test_model_accepts_isolated_executor(backend):
     validate_config(OmniDiffusionConfig(dtype=torch.bfloat16, distributed_executor_backend=backend))
+
+
+@pytest.mark.parametrize("deploy", ["hy_nomas.yaml", "hy_nomas_ar.yaml"])
+def test_public_deploy_resolves_startup_lora_and_dit(checkpoint, deploy):
+    deployment = Path(__file__).resolve().parents[4] / "vllm_omni" / "deploy" / deploy
+    options = {
+        "lora_backend": "distill",
+        "lora_path": ["/path/to/cinematic"],
+        "lora_scale": 0.0,
+        "custom_pipeline_args": {"dit_checkpoint": "/path/to/native_dit.safetensors"},
+    }
+    resolution = resolve_omni_config(
+        str(checkpoint),
+        trust_remote_code=None,
+        deploy_config_path=str(deployment),
+        cli_overrides=options,
+        stage_overrides=None,
+        strategy_config_path=None,
+    )
+    [stage] = resolution.stage_configs
+    assert stage.diffusion_config.lora_backend == "distill"
+    assert stage.diffusion_config.lora_path == ["/path/to/cinematic"]
+    assert stage.diffusion_config.lora_scale == 0.0
+    assert stage.diffusion_config.custom_pipeline_args["dit_checkpoint"] == "/path/to/native_dit.safetensors"
 
 
 def make_transformer():
@@ -849,7 +886,142 @@ def test_standard_loader_reads_shards_and_remaps_diffusers_parameters(checkpoint
         torch.testing.assert_close(value, expected[name], rtol=0, atol=0)
 
 
-@pytest.mark.parametrize("kind", ["duplicate", "unknown", "shape"])
+def _write_lora(path, config, tensors):
+    path.mkdir()
+    (path / "adapter_config.json").write_text(json.dumps(config))
+    save_file(tensors, path / "adapter.safetensors")
+
+
+@pytest.mark.parametrize(
+    ("dit_override", "scale"),
+    [(None, None), (None, 0.0), (None, 0.5), ("native", 0.5), ("merged", None)],
+)
+def test_official_lora_loads_through_pipeline(checkpoint, tmp_path, monkeypatch, dit_override, scale):
+    transformer = make_transformer().to(dtype=torch.bfloat16)
+    transformer.patch_size = (1, 1, 1)
+    transformer.config = SimpleNamespace(in_channels=2)
+    transformer.double_blocks = []
+    transformer.heads_num = 1
+    transformer.hidden_size = 2
+    vae = nn.Linear(2, 2, bias=False)
+    vae.spatial_compression_ratio = 32
+    monkeypatch.setattr(pipeline_hy_nomas, "get_local_device", lambda: torch.device("cuda:0"))
+    monkeypatch.setattr(pipeline_hy_nomas, "build_transformer", lambda *_args: transformer)
+    monkeypatch.setattr(pipeline_hy_nomas, "build_decoder", lambda *_args: vae)
+    monkeypatch.setattr(pipeline_hy_nomas, "TextEncoder", lambda **_kwargs: nn.Linear(2, 2))
+
+    original = torch.tensor([[0.503, 0.247], [0.997, 0.126]], dtype=torch.float32)
+    base = torch.eye(2)
+    camera_name = "action_modules.0.weight"
+    delta = torch.tensor([[0.5, -1.0], [1.0, -2.0]])
+    bundled = original.bfloat16()
+    save_file(
+        {"base.weight": base.bfloat16(), "double_blocks.0.action_module.weight": bundled},
+        checkpoint / "transformer" / "diffusion_pytorch_model.safetensors",
+    )
+    save_file({"weight": base}, checkpoint / "decoder" / "diffusion_pytorch_model.safetensors")
+    custom = {}
+    expected = bundled
+    if dit_override is not None:
+        path = tmp_path / "official[dit].safetensors"
+        selected = original + delta if dit_override == "merged" else original
+        save_file({"base.weight": base, camera_name: selected}, path)
+        custom["dit_checkpoint"] = str(path)
+        expected = (original + delta).bfloat16()
+    adapter_dir = tmp_path / "adapter"
+    if scale is not None:
+        stem = "action_modules.0._checkpoint_wrapped_module"
+        _write_lora(
+            adapter_dir,
+            {"format_version": 1, "rank": 1, "alpha": 2, "targets": ["action_modules.*"]},
+            {
+                f"{stem}.lora_A.weight": torch.tensor([[0.5, -1.0]]),
+                f"{stem}.lora_B.weight": torch.tensor([[1.0], [2.0]]),
+            },
+        )
+        if dit_override is None:
+            expected = (bundled.float() + 2 * scale * delta).bfloat16()
+    config = OmniDiffusionConfig(
+        model=str(checkpoint),
+        dtype=torch.bfloat16,
+        distributed_executor_backend="mp",
+        custom_pipeline_args=custom,
+        lora_backend="distill" if scale is not None else "peft",
+        lora_path=[str(adapter_dir)] if scale is not None else None,
+        lora_scale=scale if scale is not None else 1.0,
+    )
+    pipeline = HyNomasPipeline(od_config=config)
+    DiffusersPipelineLoader(LoadConfig(), config).load_weights(pipeline)
+    assert getattr(pipeline, "lora_is_fused", False) == (scale is not None)
+    torch.testing.assert_close(transformer.action_modules[0].weight, expected, rtol=0, atol=0)
+    torch.testing.assert_close(transformer.base.weight, base.bfloat16(), rtol=0, atol=0)
+    torch.testing.assert_close(pipeline.vae.weight, base, rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    ("problem", "error"),
+    [
+        ("missing_pair", "Missing:.*action_modules.0.lora_A"),
+        ("missing_factor", "Missing:.*base.lora_B"),
+        ("unknown_tensor", "Unexpected:.*other.lora_A"),
+        ("duplicate_alias", "Duplicate.*base.lora_A"),
+        ("wrong_shape", "has shape"),
+        ("wrong_dtype", "must be FP32"),
+        ("bad_target", "matches no DiT linear"),
+        ("bad_rank", "rank must be"),
+        ("bad_alpha", "alpha must be"),
+    ],
+)
+def test_official_lora_rejects_invalid_adapter_before_loading(tmp_path, problem, error):
+    model = make_transformer()
+    original = {name: value.clone() for name, value in model.state_dict().items()}
+    weights = {name: torch.zeros_like(value) for name, value in original.items()}
+    config = {"format_version": 1, "rank": 1, "alpha": 2, "targets": ["base", "action_modules.*"]}
+    tensors = {
+        f"{target}.lora_{factor}.weight": torch.ones(shape)
+        for target in ("base", "action_modules.0")
+        for factor, shape in (("A", (1, 2)), ("B", (2, 1)))
+    }
+    if problem == "missing_pair":
+        del tensors["action_modules.0.lora_A.weight"], tensors["action_modules.0.lora_B.weight"]
+    elif problem == "missing_factor":
+        del tensors["base.lora_B.weight"]
+    elif problem == "unknown_tensor":
+        tensors["other.lora_A.weight"] = torch.ones(1, 2)
+    elif problem == "duplicate_alias":
+        tensors["base._checkpoint_wrapped_module.lora_A.weight"] = torch.ones(1, 2)
+    elif problem == "wrong_shape":
+        tensors["base.lora_A.weight"] = torch.ones(2, 2)
+    elif problem == "wrong_dtype":
+        tensors["base.lora_A.weight"] = torch.ones(1, 2, dtype=torch.int8)
+    elif problem == "bad_target":
+        config["targets"] = ["other"]
+    elif problem == "bad_rank":
+        config["rank"] = 0
+    else:
+        config["alpha"] = float("nan")
+    directory = tmp_path / "adapter"
+    _write_lora(directory, config, tensors)
+    with pytest.raises(ValueError, match=error):
+        load_transformer_weights(model, weights.items(), HyNomasLoRA(directory, scale=0.0))
+    for name, value in model.state_dict().items():
+        torch.testing.assert_close(value, original[name], rtol=0, atol=0)
+
+
+@pytest.mark.parametrize(
+    ("path", "scale", "error"),
+    [
+        (["one", "two"], 1.0, "lora_path"),
+        ("one", [0.0, 1.0], "lora_scale"),
+        ("one", float("inf"), "lora_scale"),
+    ],
+)
+def test_official_lora_requires_one_path_and_finite_scale(path, scale, error):
+    with pytest.raises(ValueError, match=error):
+        HyNomasLoRA.from_args(path, scale)
+
+
+@pytest.mark.parametrize("kind", ["duplicate", "unknown", "shape", "quantized"])
 def test_malformed_dit_weight_stream_is_rejected(kind):
     transformer = make_transformer()
     weights = list(transformer.state_dict().items())
@@ -857,8 +1029,10 @@ def test_malformed_dit_weight_stream_is_rejected(kind):
         weights.append(("double_blocks.0.action_module.weight", weights[1][1]))
     elif kind == "unknown":
         weights.append(("extra.weight", torch.zeros(2, 2)))
-    else:
+    elif kind == "shape":
         weights[0] = (weights[0][0], torch.zeros(3, 3))
+    else:
+        weights[0] = (weights[0][0], weights[0][1].to(torch.int8))
     with pytest.raises((ValueError, AssertionError)):
         load_transformer_weights(transformer, weights)
 
