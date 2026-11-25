@@ -5,6 +5,7 @@
 import hashlib
 from collections import OrderedDict
 from collections.abc import Iterable
+from contextlib import closing
 from functools import partial
 from types import SimpleNamespace
 from typing import ClassVar
@@ -34,15 +35,16 @@ from vllm_omni.diffusion.models.hy_nomas.layers import (
     modulate,
     rotary_tables,
 )
+from vllm_omni.diffusion.models.hy_nomas.lora import HyNomasLoRA
 from vllm_omni.experimental.ar_diffusion.kv_cache.segmented import ARDiffusionSegmentedKVState
 
 _DIT_NAMES = WeightsMapper(
     orig_to_new_regex={
+        re.compile(r"\._checkpoint_wrapped_module\."): ".",
+        re.compile(r"_checkpoint_wrapped_module\."): "",
         re.compile(r"^(double_blocks\.\d+)\.attn\.((?:img|txt)_attn_.+)$"): r"\1.\2",
         re.compile(r"^(txt_in\.individual_token_refiner\.blocks\.\d+)\.attn\.(self_attn_.+)$"): r"\1.\2",
         re.compile(r"^double_blocks\.(\d+)\.action_module\.(.+)$"): r"action_modules.\1.\2",
-        re.compile(r"\._checkpoint_wrapped_module\."): ".",
-        re.compile(r"_checkpoint_wrapped_module\."): "",
     },
 )
 
@@ -54,8 +56,16 @@ def build_transformer(config: DictConfig, device: torch.device, model_config: di
     return transformer.to(device=device, dtype=torch.bfloat16).eval().requires_grad_(False)
 
 
-def load_transformer_weights(transformer: nn.Module, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
-    return load_component_weights(transformer, _DIT_NAMES.apply(weights))
+def load_transformer_weights(
+    transformer: nn.Module,
+    weights: Iterable[tuple[str, torch.Tensor]],
+    lora: HyNomasLoRA | None = None,
+) -> set[str]:
+    weights = _DIT_NAMES.apply(weights)
+    if lora is None:
+        return load_component_weights(transformer, weights)
+    with closing(lora.merge_weights(transformer, weights, _DIT_NAMES)) as merged_weights:
+        return load_component_weights(transformer, merged_weights)
 
 
 def load_component_weights(module: nn.Module, weights: Iterable[tuple[str, torch.Tensor]]) -> set[str]:
@@ -68,6 +78,10 @@ def load_component_weights(module: nn.Module, weights: Iterable[tuple[str, torch
         target = parameters.get(name, buffers.get(name))
         if target is None:
             raise ValueError(f"Unexpected Hy-Nomas weight: {name}")
+        if tensor.shape != target.shape:
+            raise ValueError(f"Hy-Nomas weight {name} has shape {tensor.shape}, expected {target.shape}.")
+        if target.is_floating_point() and tensor.dtype not in (torch.float32, torch.bfloat16, torch.float16):
+            raise ValueError(f"Hy-Nomas weight {name} must be FP32, FP16 or BF16, got {tensor.dtype}.")
         default_weight_loader(target, tensor)
         loaded.add(name)
     missing = parameters.keys() - loaded

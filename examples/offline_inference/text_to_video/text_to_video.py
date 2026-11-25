@@ -613,6 +613,8 @@ def main():
             lora_path = lora_path[0]
         omni_kwargs["lora_path"] = lora_path
         omni_kwargs["lora_backend"] = args.lora_backend
+        if args.lora_backend == "distill":
+            omni_kwargs["lora_scale"] = args.lora_scale
     if args.use_hsdp:
         omni_kwargs["use_hsdp"] = args.use_hsdp
         omni_kwargs["hsdp_shard_size"] = args.hsdp_shard_size

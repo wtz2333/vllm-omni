@@ -203,6 +203,46 @@ Model extras use the JSON `extra_params` form field, for example
 `-F 'extra_params={"segment_frame_boundaries":[0,60,121],"camera_trajectory":"pan_left","segment_has_camera":[true,true]}'`
 with a two-segment prompt and 121 frames. `generate_sound=false` is accepted.
 
+## Official LoRA adapters
+
+Hy-Nomas supports Tencent's Cinematic and Dual Arm Robotics adapters. Each
+adapter directory contains `adapter_config.json` and `adapter.safetensors`.
+Download one of the [official adapters](https://huggingface.co/tencent/Hy-Nomas/tree/main/DiT/lora_weights).
+
+```bash
+hf download tencent/Hy-Nomas --include 'DiT/lora_weights/cinematic/*' --local-dir ./Hy-Nomas
+
+vllm serve ./Hy-Nomas-Diffusers --omni --port 8098 \
+  --deploy-config vllm_omni/deploy/hy_nomas.yaml \
+  --lora-backend distill --lora-path ./Hy-Nomas/DiT/lora_weights/cinematic --lora-scale 1
+```
+
+Use `dual_arm_robotics` in both paths for the robotics adapter. The worker
+validates each declared target and merges one adapter into the DiT at startup.
+The effective multiplier is `lora_scale * alpha / rank`. A scale of 0 checks the
+adapter and loads the selected DiT checkpoint without applying a delta. Each
+request and every chunk of a realtime session use the server's unquantized
+startup weights.
+
+The shared offline video example accepts the same three LoRA flags. For a
+deploy YAML, set `lora_backend`, `lora_path` and `lora_scale` on stage 0.
+
+For an already merged DiT, set `custom_pipeline_args.dit_checkpoint` to its
+local single-file safetensors path. The model argument still points to
+`Hy-Nomas-Diffusers` for the component configs, text encoder, and decoder.
+
+```bash
+vllm serve ./Hy-Nomas-Diffusers --omni --port 8098 \
+  --deploy-config vllm_omni/deploy/hy_nomas.yaml \
+  --custom-pipeline-args '{"dit_checkpoint":"/path/to/merged_model.safetensors"}'
+```
+
+For parity with Tencent's [merge script](https://github.com/Tencent-Hunyuan/Hy-Nomas/blob/911cea6458a89c2663513ff7099561ec190dd491/scripts/train/merge_lora.py),
+set `dit_checkpoint` to the same unmerged FP32 distilled DiT and supply the
+adapter with scale 1. The merge uses the source checkpoint values. The bundled
+Diffusers checkpoint is stored in BF16, so merging into it can produce
+different rounded values from a merge into the native FP32 checkpoint.
+
 ## CPU offload
 
 Select the components to offload with the shared configuration:
@@ -357,11 +397,12 @@ MP4 incrementally instead of retaining all decoded frames in host memory.
 | [Sequence parallelism](../../docs/user_guide/diffusion/parallelism/sequence_parallel.md) | Strict Ulysses with the existing worker group. Ring, AllGather-KV, and UAA are unsupported. |
 | [CPU offload](../../docs/user_guide/diffusion/cpu_offload.md) | Module offload, including with SP; layerwise and distributed layerwise offload are unsupported. |
 | [Other parallelism](../../docs/user_guide/diffusion/parallelism/overview.md) | Experimental PixelUMM window decoding uses the Ulysses group. TP, PP, DP, CFG, HSDP, text encoder sharding, and VAE patch parallelism are unsupported. |
-| [Other acceleration](../../docs/user_guide/diffusion_features.md) | Quantization, LoRA, and Cache-DiT are unsupported. Use eager execution; full-transformer compilation is rejected and generic regional compilation leaves the cached reference forward unchanged. FlexAttention retains its own kernel compilation. |
+| [Official LoRA](#official-lora-adapters) | Merge a single Tencent adapter at startup or load an already merged DiT. The runtime uses unquantized BF16. |
+| [Other acceleration](../../docs/user_guide/diffusion_features.md) | Quantization and Cache-DiT are unsupported. Use eager execution; full-transformer compilation is rejected and generic regional compilation leaves the cached reference forward unchanged. FlexAttention retains its own kernel compilation. |
 
 ## Verification
 
-### Scope relative to the RFC
+### Scope of the initial integration
 
 This first PR's acceptance scope covers model integration, offline/full/recent
 accuracy and normal realtime output. Historical qualification below applies to

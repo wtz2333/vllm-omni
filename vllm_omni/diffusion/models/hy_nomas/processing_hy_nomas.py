@@ -42,6 +42,8 @@ class HyNomasRequest:
 
 
 def normalize_request(prompt: OmniPromptType, params: OmniDiffusionSamplingParams) -> HyNomasRequest:
+    if params.lora_request:
+        raise OmniClientError("Hy-Nomas uses startup LoRA merging. Set lora_path on the deployment.")
     if not isinstance(prompt, (str, dict)):
         raise OmniClientError("Hy-Nomas requires a text prompt.")
     text = prompt if isinstance(prompt, str) else prompt.get("prompt")

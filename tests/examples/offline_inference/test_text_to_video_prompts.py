@@ -71,6 +71,40 @@ def test_quantization_cli_options_are_mutually_exclusive(monkeypatch):
     assert exc.value.code == 2
 
 
+def test_distill_lora_cli_forwards_zero_startup_scale(monkeypatch, mocker):
+    mod = _load_text_to_video()
+
+    class StopBeforeModelLoadError(Exception):
+        pass
+
+    omni = mocker.patch.object(mod, "Omni", side_effect=StopBeforeModelLoadError)
+    monkeypatch.setattr(mod, "current_omni_platform", SimpleNamespace(device_type="cpu"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "text_to_video.py",
+            "--model",
+            "tencent/Hy-Nomas-Diffusers",
+            "--model-class-name",
+            "HyNomasPipeline",
+            "--lora-backend",
+            "distill",
+            "--lora-path",
+            "/path/to/cinematic",
+            "--lora-scale",
+            "0",
+        ],
+    )
+
+    with pytest.raises(StopBeforeModelLoadError):
+        mod.main()
+
+    assert omni.call_args.kwargs["lora_path"] == "/path/to/cinematic"
+    assert omni.call_args.kwargs["lora_backend"] == "distill"
+    assert omni.call_args.kwargs["lora_scale"] == 0.0
+
+
 @pytest.mark.parametrize(
     ("negative_prompt", "expected_negative_prompt"),
     [(None, None), ("", ""), ("blurry", "blurry")],
